@@ -16,8 +16,10 @@ def test_register(client: TestClient):
 
     assert response.status_code == 201
     data = response.json()
-    assert data["email"] == "newuser@example.com"
-    assert data["name"] == "New User"
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert data["user"]["email"] == "newuser@example.com"
+    assert data["user"]["name"] == "New User"
 
 
 def test_register_duplicate_email(client: TestClient, test_user: User):
@@ -31,7 +33,7 @@ def test_register_duplicate_email(client: TestClient, test_user: User):
         },
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
 
 
 def test_login(client: TestClient, test_user: User):
@@ -48,6 +50,7 @@ def test_login(client: TestClient, test_user: User):
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    assert data["user"]["email"] == test_user.email
 
 
 def test_login_invalid_credentials(client: TestClient):

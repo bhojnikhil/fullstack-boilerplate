@@ -1,9 +1,10 @@
 """Tests for AuthService."""
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.services.auth import AuthService
 from app.repositories.user import UserRepository
+from app.schemas.user import UserRegister, UserLogin
 from app.auth.security import hash_password, verify_password
 
 
@@ -16,11 +17,12 @@ def auth_service(test_db: Session) -> AuthService:
 
 def test_register_new_user(auth_service: AuthService, test_db: Session):
     """Test registering a new user."""
-    user = auth_service.register(
+    data = UserRegister(
         email="newuser@example.com",
         name="New User",
         password="password123",
     )
+    user = auth_service.register_with_email(data)
 
     assert user.email == "newuser@example.com"
     assert user.name == "New User"
@@ -29,44 +31,48 @@ def test_register_new_user(auth_service: AuthService, test_db: Session):
 
 def test_register_duplicate_email(auth_service: AuthService, test_user):
     """Test registering with duplicate email."""
+    data = UserRegister(
+        email=test_user.email,
+        name="Another User",
+        password="password123",
+    )
     with pytest.raises(HTTPException) as exc_info:
-        auth_service.register(
-            email=test_user.email,
-            name="Another User",
-            password="password123",
-        )
+        auth_service.register_with_email(data)
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
 
 
-def test_login_success(auth_service: AuthService, test_user):
-    """Test successful login."""
-    token_data = auth_service.login(
+def test_authenticate_success(auth_service: AuthService, test_user):
+    """Test successful authentication."""
+    data = UserLogin(
         email=test_user.email,
         password="testpassword123",
     )
+    user = auth_service.authenticate_with_email(data)
 
-    assert "access_token" in token_data
-    assert token_data["token_type"] == "bearer"
+    assert user.email == test_user.email
+    assert user.is_active is True
 
 
-def test_login_invalid_email(auth_service: AuthService):
-    """Test login with invalid email."""
+def test_authenticate_invalid_email(auth_service: AuthService):
+    """Test authentication with invalid email."""
+    data = UserLogin(
+        email="nonexistent@example.com",
+        password="password123",
+    )
     with pytest.raises(HTTPException) as exc_info:
-        auth_service.login(
-            email="nonexistent@example.com",
-            password="password123",
-        )
+        auth_service.authenticate_with_email(data)
 
-    assert exc_info.value.status_code == 401
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_login_invalid_password(auth_service: AuthService, test_user):
-    """Test login with invalid password."""
+def test_authenticate_invalid_password(auth_service: AuthService, test_user):
+    """Test authentication with invalid password."""
+    data = UserLogin(
+        email=test_user.email,
+        password="wrongpassword",
+    )
     with pytest.raises(HTTPException) as exc_info:
-        auth_service.login(
-            email=test_user.email,
-            password="wrongpassword",
-        )
+        auth_service.authenticate_with_email(data)
 
-    assert exc_info.value.status_code == 401
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED

@@ -51,7 +51,11 @@ def test_get_nonexistent_user(user_repo: UserRepository):
 
 def test_update_user(user_repo: UserRepository, test_user: User):
     """Test updating user."""
-    updated = user_repo.update(test_user.id, name="Updated Name")
+    from app.schemas.user import UserUpdate
+
+    update_data = UserUpdate(name="Updated Name")
+    updated = user_repo.update(user=test_user, name="Updated Name")
 
     assert updated is not None
     assert updated.name == "Updated Name"
+    assert updated.id == test_user.id
