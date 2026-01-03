@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Full-stack boilerplate API"
 authors = ["Your Name <you@example.com>"]
 license = "MIT"
-readme = "README.md"
+packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
 python = "^3.13"
