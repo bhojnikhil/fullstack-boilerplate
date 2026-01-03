@@ -1,0 +1,46 @@
+# Backend
+api/.env
+api/__pycache__/
+api/*.egg-info/
+api/.pytest_cache/
+api/.mypy_cache/
+api/htmlcov/
+api/.coverage
+api/dist/
+api/build/
+api/venv/
+
+# Frontend
+client/.env.local
+client/node_modules/
+client/.next/
+client/out/
+client/dist/
+client/.turbo/
+client/coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+.tmp/
+tmp/

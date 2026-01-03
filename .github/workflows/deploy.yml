@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push Docker images
+        env:
+          REGISTRY: ghcr.io
+          IMAGE_NAME: ${{ github.repository }}
+        run: |
+          # This is a template for pushing to container registry
+          # Customize based on your deployment platform
+          echo "Deploy to production - customize based on your platform"
+          echo "Examples: AWS ECR, Docker Hub, GitHub Container Registry, etc."
+
+      - name: Deploy to server
+        # Add your deployment steps here
+        # Examples: SSH to server, update docker-compose, restart services
+        run: |
+          echo "Deploy steps - customize based on your platform"

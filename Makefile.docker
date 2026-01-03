@@ -1,0 +1,31 @@
+.PHONY: docker-build docker-up docker-down docker-logs docker-shell-api docker-shell-client
+
+docker-build:
+	docker-compose build
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+
+docker-logs:
+	docker-compose logs -f
+
+docker-logs-api:
+	docker-compose logs -f api
+
+docker-logs-client:
+	docker-compose logs -f client
+
+docker-shell-api:
+	docker-compose exec api sh
+
+docker-shell-client:
+	docker-compose exec client sh
+
+docker-clean:
+	docker-compose down -v
+
+docker-restart:
+	docker-compose restart

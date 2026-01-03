@@ -1,0 +1,111 @@
+# Pre-commit hooks configuration
+# Install: pre-commit install
+# Run on all files: pre-commit run --all-files
+# Update: pre-commit autoupdate
+
+repos:
+  # ============================================================================
+  # BACKEND PYTHON LINTING & FORMATTING
+  # ============================================================================
+
+  # Ruff: Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        name: ruff-lint
+        args: [--fix]
+        stages: [commit]
+
+      - id: ruff-format
+        name: ruff-format
+        stages: [commit]
+
+  # Mypy: Static type checker
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        name: mypy
+        files: ^api/
+        additional_dependencies:
+          - types-all
+          - sqlalchemy[mypy]
+        args: []
+        stages: [commit]
+
+  # ============================================================================
+  # FRONTEND JAVASCRIPT/TYPESCRIPT LINTING & FORMATTING
+  # ============================================================================
+
+  # ESLint: JavaScript/TypeScript linting
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.0.0
+    hooks:
+      - id: eslint
+        name: eslint
+        files: \.[jt]sx?$
+        types: [file]
+        args: [--fix]
+        additional_dependencies:
+          - eslint
+          - eslint-config-next
+          - "@typescript-eslint/eslint-plugin"
+          - "@typescript-eslint/parser"
+          - "@next/eslint-plugin-next"
+        stages: [commit]
+
+  # Prettier: Code formatter
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0
+    hooks:
+      - id: prettier
+        name: prettier
+        files: \.[jt]sx?$|\.json$|\.yaml$|\.yml$|\.md$
+        types: [file]
+        additional_dependencies:
+          - prettier
+          - prettier-plugin-tailwindcss
+        stages: [commit]
+
+  # ============================================================================
+  # GENERAL FILE QUALITY
+  # ============================================================================
+
+  # General pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        files: \.(py|js|ts|tsx|jsx|json|yaml|yml|md)$
+
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        files: \.(py|js|ts|tsx|jsx|json|yaml|yml|md)$
+
+      # Validate YAML syntax
+      - id: check-yaml
+        name: check-yaml
+        files: \.(yaml|yml)$
+
+      # Check for large files
+      - id: check-added-large-files
+        name: check-added-large-files
+        args: [--maxkb=1000]
+
+      # Detect private keys
+      - id: detect-private-key
+        name: detect-private-key
+
+      # Check JSON syntax
+      - id: check-json
+        name: check-json
+
+# Default configurations
+default_stages: [commit]
+default_language_version:
+  python: python3.13
+  node: "22"
