@@ -4,6 +4,7 @@ Supports account linking and OAuth-only user creation.
 """
 
 import secrets
+import uuid
 from typing import Any
 
 import httpx
@@ -159,7 +160,7 @@ class OAuthService:
 
         if oauth_account is not None:
             # OAuth account exists, return linked user
-            user = self._user_repository.get_by_id(oauth_account.user_id)
+            user = self._user_repository.get_by_id(uuid.UUID(str(oauth_account.user_id)))
             if user is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

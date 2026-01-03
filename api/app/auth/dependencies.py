@@ -42,8 +42,8 @@ def get_current_user(
         if user_id_str is None:
             raise credentials_exception
         user_id = uuid.UUID(user_id_str)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except (JWTError, ValueError) as err:
+        raise credentials_exception from err
 
     # Get user from database
     user_repo = UserRepository(db)

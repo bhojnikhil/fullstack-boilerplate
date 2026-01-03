@@ -1,14 +1,15 @@
 """Alembic migration environment."""
-import os
 from logging.config import fileConfig
+
 from sqlalchemy import engine_from_config, pool
+
 from alembic import context
 
 # Import your models here to auto-generate migrations
 from app.core.config import settings
 from app.models.base import Base
-from app.models.user import User  # noqa: F401
 from app.models.item import Item  # noqa: F401
+from app.models.user import User  # noqa: F401
 
 # this is the Alembic Config object
 config = context.config

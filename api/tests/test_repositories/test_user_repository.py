@@ -1,9 +1,10 @@
 """Tests for UserRepository."""
 import pytest
 from sqlalchemy.orm import Session
-from app.repositories.user import UserRepository
-from app.models.user import User
+
 from app.auth.security import hash_password
+from app.models.user import User
+from app.repositories.user import UserRepository
 
 
 @pytest.fixture
@@ -51,9 +52,6 @@ def test_get_nonexistent_user(user_repo: UserRepository):
 
 def test_update_user(user_repo: UserRepository, test_user: User):
     """Test updating user."""
-    from app.schemas.user import UserUpdate
-
-    update_data = UserUpdate(name="Updated Name")
     updated = user_repo.update(user=test_user, name="Updated Name")
 
     assert updated is not None

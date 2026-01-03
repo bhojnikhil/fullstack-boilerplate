@@ -2,10 +2,10 @@
 import pytest
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from app.services.auth import AuthService
+
 from app.repositories.user import UserRepository
-from app.schemas.user import UserRegister, UserLogin
-from app.auth.security import hash_password, verify_password
+from app.schemas.user import UserLogin, UserRegister
+from app.services.auth import AuthService
 
 
 @pytest.fixture

@@ -1,19 +1,16 @@
 """Pytest configuration and shared fixtures."""
-import os
-from typing import Generator
+from collections.abc import Generator
+
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import settings
-from app.core.db import get_db
-from app.models.base import Base
-from app.main import app
-from app.models.user import User
-from app.models.item import Item
 from app.auth.security import hash_password
-
+from app.core.db import get_db
+from app.main import app
+from app.models.base import Base
+from app.models.user import User
 
 # Use in-memory SQLite for testing
 TEST_SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
@@ -32,15 +29,15 @@ def test_db_engine():
 
 
 @pytest.fixture
-def test_db(test_db_engine) -> Generator[Session, None, None]:
+def test_db(test_db_engine) -> Generator[Session]:
     """Create test database session."""
-    TestingSessionLocal = sessionmaker(
+    testing_session_local = sessionmaker(
         autocommit=False, autoflush=False, bind=test_db_engine
     )
 
     connection = test_db_engine.connect()
     transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    session = testing_session_local(bind=connection)
 
     # Clear all tables before each test
     Base.metadata.drop_all(bind=connection)
@@ -54,7 +51,7 @@ def test_db(test_db_engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def client(test_db: Session) -> Generator[TestClient, None, None]:
+def client(test_db: Session) -> Generator[TestClient]:
     """Create test client with test database."""
 
     def override_get_db():
