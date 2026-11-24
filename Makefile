@@ -4,6 +4,7 @@
 UV ?= uv
 PNPM ?= pnpm
 COMPOSE ?= docker compose
+PRE_COMMIT ?= pre-commit
 
 API_DIR := apps/api
 # Host-side Python commands (tests, migrations) talk to the compose Postgres.
@@ -14,7 +15,7 @@ CYAN := \033[0;36m
 GREEN := \033[0;32m
 NC := \033[0m
 
-.PHONY: help setup dev up down logs ps build fresh smoke \
+.PHONY: help setup hooks dev up down logs ps build fresh smoke \
 	migrate migration db-shell \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
 	fmt fmt-check build-web
@@ -28,6 +29,9 @@ help: ## Show this help message
 setup: ## Install API (uv) and JS (pnpm) dependencies from the lockfiles
 	cd $(API_DIR) && $(UV) sync --locked
 	$(PNPM) install --frozen-lockfile
+
+hooks: ## Install the pre-commit Git hook
+	$(PRE_COMMIT) install --install-hooks
 
 dev: ## postgres + api in Docker (hot reload), web dev server on the host
 	$(COMPOSE) up -d --wait postgres api

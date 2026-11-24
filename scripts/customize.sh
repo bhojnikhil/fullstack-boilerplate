@@ -1,114 +1,145 @@
 #!/usr/bin/env bash
-# Replace template placeholders with your project's values.
-#
-# Usage: ./scripts/customize.sh PROJECT_NAME "App Name" [DOMAIN]
-#
-# - Replaces {{PROJECT_NAME}}, {{APP_NAME}} and {{DOMAIN}} in text files
-#   (skips .git, node_modules, .venv, .next and other generated directories).
-# - Creates apps/api/.env and apps/web/.env.local from their .env.example files if
-#   they do not exist, and writes a freshly generated SECRET_KEY into apps/api/.env
-#   ONLY. The tracked .env.example files keep their placeholders, so no secret
-#   ever lands in a committed file.
-# - Safe to re-run: files without placeholders are left untouched and existing
-#   .env files are never overwritten.
-# - Works with both GNU sed (Linux) and BSD sed (macOS).
+# Replace template placeholders and initialize missing local environment files.
 
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
 usage() {
-    echo "Usage: ./scripts/customize.sh PROJECT_NAME APP_NAME [DOMAIN]"
-    echo ""
-    echo "  PROJECT_NAME  Lowercase project name (a-z, 0-9, -, _), e.g. myapp"
-    echo "  APP_NAME      Display name, e.g. 'My App'"
-    echo "  DOMAIN        Production domain (optional, default: localhost)"
+    cat <<'USAGE'
+Usage: ./scripts/customize.sh PROJECT_NAME [APP_NAME [DOMAIN]] [options]
+
+  PROJECT_NAME               Lowercase project name (a-z, 0-9, -, _)
+  --display-name NAME        Display name (required if APP_NAME is omitted)
+  --domain HOSTNAME          Domain without scheme or port (default: localhost)
+  --android-package ID       Android application ID (default: com.example.<project>)
+  --ios-bundle-id ID         iOS bundle identifier (default: com.example.<project>)
+  --deep-link-scheme SCHEME   Lowercase URI scheme (default: derived from PROJECT_NAME)
+  -h, --help                 Show this help
+USAGE
 }
 
-if [ $# -lt 2 ]; then
-    printf "${RED}Error: missing required arguments${NC}\n\n"
+die() {
+    printf 'Error: %s\n' "$*" >&2
+    exit 1
+}
+
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
     usage
-    exit 1
+    exit 0
+fi
+[[ $# -gt 0 ]] || die "PROJECT_NAME is required. See --help."
+
+project=$1
+shift
+[[ "$project" =~ ^[a-z0-9_-]+$ ]] || die "PROJECT_NAME must use a-z, 0-9, - or _."
+
+display=''
+domain=localhost
+# Keep the original positional form working alongside the named options.
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    display=$1
+    shift
+fi
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    domain=$1
+    shift
 fi
 
-PROJECT_NAME=$1
-APP_NAME=$2
-DOMAIN=${3:-localhost}
+app_id="${project//[-_]/}"
+[[ "$app_id" =~ ^[a-z] ]] || app_id="app$app_id"
+android_package="com.example.$app_id"
+ios_bundle_id="com.example.$app_id"
+deep_link_scheme="${project//_/-}"
+[[ "$deep_link_scheme" =~ ^[a-z] ]] || deep_link_scheme="app-$deep_link_scheme"
 
-if ! [[ "$PROJECT_NAME" =~ ^[a-z0-9_-]+$ ]]; then
-    printf "${RED}Error: PROJECT_NAME must be lowercase alphanumeric (a-z, 0-9, -, _)${NC}\n"
-    exit 1
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --display-name|--domain|--android-package|--ios-bundle-id|--deep-link-scheme)
+            [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 requires a value."
+            case "$1" in
+                --display-name) display=$2 ;;
+                --domain) domain=$2 ;;
+                --android-package) android_package=$2 ;;
+                --ios-bundle-id) ios_bundle_id=$2 ;;
+                --deep-link-scheme) deep_link_scheme=$2 ;;
+            esac
+            shift 2
+            ;;
+        *) die "Unknown argument: $1. See --help." ;;
+    esac
+done
+
+[[ "$display" =~ [^[:space:]] && "$display" != *$'\n'* && "$display" != *$'\r'* && "$display" != *'{{'* ]] \
+    || die "Display name must be nonblank, on one line, and contain no template markers."
+host_label='[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
+[[ ${#domain} -le 253 && "$domain" =~ ^$host_label(\.$host_label)*$ ]] \
+    || die "Domain must be a hostname without a scheme, port or path."
+[[ "$android_package" =~ ^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$ ]] \
+    || die "Android package must contain at least two dot-separated identifiers starting with letters."
+[[ "$ios_bundle_id" =~ ^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$ ]] \
+    || die "iOS bundle ID must contain at least two dot-separated components using letters, digits or hyphens."
+[[ "$deep_link_scheme" =~ ^[a-z][a-z0-9+.-]*$ ]] \
+    || die "Deep-link scheme must start with a lowercase letter and use a-z, 0-9, +, . or -."
 
 # Run from the repository root regardless of the caller's working directory.
 cd "$(dirname "$0")/.."
 
-# In-place sed that works on GNU and BSD sed.
-sed_inplace() {
-    if sed --version >/dev/null 2>&1; then
-        sed -i "$@"
-    else
-        sed -i '' "$@"
-    fi
-}
+# BSD sed requires an explicit backup suffix for in-place edits.
+if sed --version >/dev/null 2>&1; then
+    inplace=(-i)
+else
+    inplace=(-i '')
+fi
 
-# Escape a value for use as a sed replacement (handles \, & and the | delimiter).
 sed_escape() {
     printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
-printf "${YELLOW}Customizing:${NC} project=%s app='%s' domain=%s\n" "$PROJECT_NAME" "$APP_NAME" "$DOMAIN"
+display_escaped=$(sed_escape "$display")
+tokens='\{\{(PROJECT_NAME|APP_NAME|DISPLAY_NAME|DOMAIN|ANDROID_PACKAGE|IOS_BUNDLE_ID|DEEP_LINK_SCHEME)\}\}'
 
-PROJECT_ESC=$(sed_escape "$PROJECT_NAME")
-APP_ESC=$(sed_escape "$APP_NAME")
-DOMAIN_ESC=$(sed_escape "$DOMAIN")
-
-count=0
 while IFS= read -r -d '' file; do
-    if grep -qE '\{\{(PROJECT_NAME|APP_NAME|DOMAIN)\}\}' "$file"; then
-        sed_inplace \
-            -e "s|{{PROJECT_NAME}}|${PROJECT_ESC}|g" \
-            -e "s|{{APP_NAME}}|${APP_ESC}|g" \
-            -e "s|{{DOMAIN}}|${DOMAIN_ESC}|g" \
+    if grep -qE "$tokens" "$file"; then
+        sed "${inplace[@]}" \
+            -e "s|{{PROJECT_NAME}}|$project|g" \
+            -e "s|{{DISPLAY_NAME}}|$display_escaped|g" \
+            -e "s|{{APP_NAME}}|$display_escaped|g" \
+            -e "s|{{DOMAIN}}|$domain|g" \
+            -e "s|{{ANDROID_PACKAGE}}|$android_package|g" \
+            -e "s|{{IOS_BUNDLE_ID}}|$ios_bundle_id|g" \
+            -e "s|{{DEEP_LINK_SCHEME}}|$deep_link_scheme|g" \
             "$file"
-        echo "  updated ${file#./}"
-        count=$((count + 1))
+        printf '  updated %s\n' "${file#./}"
     fi
 done < <(
     find . \
-        \( -name .git -o -name node_modules -o -name .venv -o -name venv \
-           -o -name .next -o -name .turbo -o -name dist -o -name build -o -name __pycache__ \
-           -o -name .mypy_cache -o -name .ruff_cache -o -name .pytest_cache \) -prune \
+        \( -name .git -o -name node_modules -o -name .pnpm-store -o -name .venv \
+           -o -name venv -o -name .next -o -name .turbo -o -name .expo \
+           -o -name dist -o -name build -o -name out -o -name coverage -o -name htmlcov \
+           -o -name __pycache__ -o -name .mypy_cache -o -name .ruff_cache \
+           -o -name .pytest_cache -o -name .tmp -o -name tmp \) -prune \
         -o -type f \
         \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
-           -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' \
-           -o -name '*.md' -o -name '.env.example' -o -name 'Dockerfile*' -o -name 'Makefile' \) \
-        ! -path './scripts/customize.sh' \
+           -o -name '*.mjs' -o -name '*.cjs' -o -name '*.json' -o -name '*.yaml' \
+           -o -name '*.yml' -o -name '*.toml' -o -name '*.md' -o -name '.env.example' \
+           -o -name '.env.*.example' -o -name 'Dockerfile*' -o -name 'Makefile' \) \
+        ! -name boilerplate-v2-prompt.md ! -name boilerplate-v2-phase-prompts.md \
         -print0
 )
-printf "${GREEN}✓${NC} Replaced placeholders in %d file(s)\n" "$count"
 
-# --- Local env files (untracked) --------------------------------------------
-if [ ! -f apps/api/.env ]; then
-    cp apps/api/.env.example apps/api/.env
-    echo "  created apps/api/.env"
-fi
-if grep -q '{{GENERATE_SECRET_KEY}}' apps/api/.env; then
-    SECRET_KEY=$(openssl rand -hex 32)
-    sed_inplace -e "s|{{GENERATE_SECRET_KEY}}|${SECRET_KEY}|g" apps/api/.env
-    echo "  generated SECRET_KEY in apps/api/.env"
-fi
+create_env() {
+    local template=$1 target=$2 secret
+    [[ -f "$template" && ! -e "$target" && ! -L "$target" ]] || return 0
 
-if [ ! -f apps/web/.env.local ]; then
-    cp apps/web/.env.example apps/web/.env.local
-    echo "  created apps/web/.env.local"
-fi
+    if [[ "$target" == apps/api/.env ]] && grep -qF '{{GENERATE_SECRET_KEY}}' "$template"; then
+        secret=$(openssl rand -hex 32)
+        (umask 077; set -C; sed "s|{{GENERATE_SECRET_KEY}}|$secret|g" "$template" > "$target")
+    else
+        (umask 077; set -C; cat "$template" > "$target")
+    fi
+    printf '  created %s\n' "$target"
+}
 
-printf "${GREEN}✓ Done.${NC}\n\n"
-echo "Next steps:"
-echo "  1. Review apps/api/.env and apps/web/.env.local"
-echo "  2. make up            # postgres, api, web"
-echo "  3. Open http://localhost:3000/auth/register to create a user"
+create_env apps/api/.env.example apps/api/.env
+create_env apps/web/.env.example apps/web/.env.local
+create_env apps/mobile/.env.example apps/mobile/.env.local

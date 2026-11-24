@@ -88,7 +88,6 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
     to be healthy, and run `scripts/check-containers.sh` (effective UID not 0, no
     mounts). Locally: `make smoke`.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
-- `.pre-commit-config.yaml` is included but not run in CI.
 
 ## Quick start (Docker)
 
@@ -98,8 +97,7 @@ Prerequisites: Docker with Compose v2 (`docker compose`), Make, Git, OpenSSL.
 git clone https://github.com/bhojnikhil/fullstack-boilerplate myapp
 cd myapp
 
-# Fill in the remaining template placeholders (currently the app display name)
-# and create apps/api/.env (with a generated SECRET_KEY) and apps/web/.env.local.
+# Fill in template placeholders and create missing local env files.
 ./scripts/customize.sh myapp "My App" myapp.com
 
 make up
@@ -114,6 +112,36 @@ Docker Compose sets the API's environment in `docker-compose.yml` and does **not
 `apps/api/.env`. That file is for running the API directly on your machine (below).
 
 Ports 5432, 8000 and 3000 must be free.
+
+### Customizing project identity
+
+```bash
+./scripts/customize.sh myapp \
+  --display-name "My App" \
+  --domain myapp.com \
+  --android-package com.myapp.android \
+  --ios-bundle-id com.myapp.ios \
+  --deep-link-scheme myapp
+```
+
+The script substitutes template markers written as a name inside double braces.
+The names are `PROJECT_NAME`, `DISPLAY_NAME` (also `APP_NAME`), `DOMAIN`,
+`ANDROID_PACKAGE`, `IOS_BUNDLE_ID`, and `DEEP_LINK_SCHEME`. Substitution is literal,
+so place display-name markers where the resulting text is valid for the file format.
+The positional form in the quick start still works. The domain defaults to
+`localhost`. Mobile IDs default to `com.example.<project>` with hyphens and
+underscores removed from the project name and an `app` prefix if needed for
+a valid identifier. The default scheme uses the project name with underscores
+turned into hyphens and an `app-` prefix if it would start with a nonletter.
+
+Package names in the lockfiles remain fixed. The script creates missing local
+env files from their corresponding `.env.example` files. For the API it
+generates a `SECRET_KEY` in `apps/api/.env` and keeps the secret marker in
+`apps/api/.env.example`. For the web and optional mobile app it creates
+`.env.local`. Existing local env files are preserved. The script
+can be rerun safely and works without `apps/mobile`. A mobile app template
+can consume the identity options by using the markers in its config or env
+example. Run `./scripts/test-customize.sh` to exercise both layouts on fixtures.
 
 ## Upgrading an existing checkout
 
@@ -196,6 +224,7 @@ The Makefile's host-side Python targets (`test`, `migrate`, `migration`) default
 ```bash
 make help                      # list all targets
 make setup                     # install locked Python + JS dependencies
+make hooks                     # install the Git pre-commit hook
 make up / make down            # start / stop the Docker stack
 make ps / make logs            # status (including health) / follow logs
 make dev                       # api in Docker + web dev server with hot reload
@@ -210,6 +239,53 @@ make db-shell                  # psql into the dev database
 make fresh                     # wipe the DB volume, rebuild, start
 make smoke                     # build + start all images as packaged; healthy, non-root, no mounts
 ```
+
+## Security checks
+
+Security checks run on PRs, pushes to `main`, and Mondays at 06:23 UTC.
+The jobs use SHA-pinned Actions and read-only contents access.
+[`security.yml`](.github/workflows/security.yml) · [ADR 0005](docs/adr/0005-security-checks.md)
+
+| Check | Coverage and failure condition |
+| --- | --- |
+| Gitleaks | Scans PR commits from the base SHA to the head SHA. On `main` pushes and the weekly run, scans the full fetched history across branches and tags. Reports matches with secret values redacted. |
+| GitHub Dependency Review | Runs on PRs and fails on newly introduced known vulnerabilities at low severity or higher in the dependency graph. Requires the repository's **Dependency graph** setting. |
+| pip-audit | Exports exact versions and hashes from `apps/api/uv.lock`, including development groups. Fails on known vulnerabilities reported for the export by the advisory service. |
+| pnpm audit | Audits the workspace lockfile's production dependencies and fails on high or critical advisories. |
+
+The workspace pins Next.js 15.5.29's transitive PostCSS to 8.5.33 to address
+two high-severity findings. The current API lockfile includes `python-jose`
+and `ecdsa` advisories without fixes at the time this check was added. The
+Python audit reports them as failures.
+
+To scan history locally with Gitleaks 8.30.1 installed, fetch `origin` and run
+`gitleaks git --redact --log-opts="--diff-merges=first-parent --remotes=origin --tags HEAD" .`.
+For a confirmed credential exposure, revoke or rotate the credential and
+remove it from current code. Review the affected commit range before deciding
+how to clean up published history.
+
+## Pre-commit
+
+Install the repository's pinned tools (uv and pnpm are listed under Host
+development), then enable the hook from the repository root.
+
+```bash
+make setup
+uv tool install pre-commit==4.7.0
+make hooks
+pre-commit run --all-files
+```
+
+Ruff check and format use the API lockfile, as does mypy. Prettier formats staged
+files in the JS workspaces, and ESLint runs workspace lint scripts through
+Turborepo. The hooks also check YAML, JSON, large files and private keys, fix
+trailing whitespace and missing final newlines, and scan staged changes with
+Gitleaks. Pre-commit provisions the Gitleaks hook's Go environment if needed.
+Review and re-stage any fixes before committing.
+
+CI runs `pre-commit run --all-files` on PRs and pushes to `main`. Gitleaks'
+hook reads the Git index diff, so the Security workflow scans committed changes
+in CI. [`pre-commit.yml`](.github/workflows/pre-commit.yml)
 
 ## Testing
 
