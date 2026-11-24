@@ -1,5 +1,15 @@
+import { isAxiosError } from "axios";
 import { create } from "zustand";
 import { api } from "./api";
+
+/** The API's `detail` message from an axios error, if it has one. */
+function errorDetail(error: unknown, fallback: string): string {
+  if (isAxiosError<{ detail?: unknown }>(error)) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string") return detail;
+  }
+  return fallback;
+}
 
 interface User {
   id: string;
@@ -32,9 +42,9 @@ export const useAuthStore = create<AuthStore>((set) => ({
       localStorage.setItem("token", token);
       set({ token, isLoading: false });
       await useAuthStore.getState().getCurrentUser();
-    } catch (error: any) {
+    } catch (error) {
       set({
-        error: error.response?.data?.detail || "Login failed",
+        error: errorDetail(error, "Login failed"),
         isLoading: false,
       });
       throw error;
@@ -49,9 +59,9 @@ export const useAuthStore = create<AuthStore>((set) => ({
       localStorage.setItem("token", token);
       set({ token, isLoading: false });
       await useAuthStore.getState().getCurrentUser();
-    } catch (error: any) {
+    } catch (error) {
       set({
-        error: error.response?.data?.detail || "Registration failed",
+        error: errorDetail(error, "Registration failed"),
         isLoading: false,
       });
       throw error;
@@ -67,7 +77,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     try {
       const response = await api.getCurrentUser();
       set({ user: response.data });
-    } catch (error) {
+    } catch {
       set({ user: null, token: null });
     }
   },

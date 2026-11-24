@@ -36,7 +36,7 @@ export default function ItemsPage() {
       const response = await api.getItems();
       setItems(response.data);
       setError("");
-    } catch (err: any) {
+    } catch (err) {
       setError("Failed to load items");
       console.error(err);
     } finally {
@@ -57,7 +57,7 @@ export default function ItemsPage() {
       setDescription("");
       setError("");
       await loadItems();
-    } catch (err: any) {
+    } catch (err) {
       setError("Failed to create item");
       console.error(err);
     }
@@ -67,7 +67,7 @@ export default function ItemsPage() {
     try {
       await api.deleteItem(id);
       await loadItems();
-    } catch (err: any) {
+    } catch (err) {
       setError("Failed to delete item");
       console.error(err);
     }
