@@ -41,6 +41,12 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/slow":
             time.sleep(1.0)
             status = 200
+        elif self.path.startswith("/redirect/"):
+            # e.g. /redirect/302 -> 302 to /200 (a healthy-looking page)
+            self.send_response(int(self.path.rsplit("/", 1)[1]))
+            self.send_header("Location", "/200")
+            self.end_headers()
+            return
         else:
             status = int(self.path.strip("/") or "200")
         self.send_response(status)
@@ -69,6 +75,12 @@ def test_healthy_on_2xx(server_url: str, status: int) -> None:
 @pytest.mark.parametrize("status", [404, 500, 503])
 def test_unhealthy_on_error_status(server_url: str, status: int) -> None:
     assert healthcheck.check(f"{server_url}/{status}") == 1
+
+
+@pytest.mark.parametrize("status", [301, 302, 307])
+def test_unhealthy_on_redirect_to_healthy_page(server_url: str, status: int) -> None:
+    """The endpoint itself must answer 2xx; a redirect (e.g. to a login page) is not healthy."""
+    assert healthcheck.check(f"{server_url}/redirect/{status}") == 1
 
 
 def test_unhealthy_when_nothing_listens() -> None:
