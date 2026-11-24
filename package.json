@@ -1,0 +1,22 @@
+{
+  "name": "fullstack-boilerplate",
+  "private": true,
+  "packageManager": "pnpm@12.23.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write apps/web packages",
+    "format:check": "prettier --check apps/web packages"
+  },
+  "prettier": "@repo/config/prettier",
+  "devDependencies": {
+    "@repo/config": "workspace:*",
+    "prettier": "3.10.1",
+    "turbo": "2.11.13"
+  }
+}
