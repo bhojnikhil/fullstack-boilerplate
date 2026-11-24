@@ -1,13 +1,16 @@
 # {{APP_NAME}} - Full-Stack Boilerplate Context
 
-This document provides comprehensive context for AI-assisted development on this full-stack boilerplate.
+This document provides context for AI-assisted development on this full-stack boilerplate.
+
+> **Read the "Known issues" warning in README.md first.** The current auth and data-access
+> code has known security and design defects that are being fixed in the v2 upgrade.
 
 ## Architecture Overview
 
 This is a 3-tier full-stack application:
 
 ```
-Frontend (Next.js 15)
+Frontend (Next.js 15, React 19)
     ↓ (axios API calls)
 Backend (FastAPI + SQLAlchemy)
     ↓ (SQL)
@@ -34,10 +37,10 @@ fullstack-boilerplate/
 │   │   │   ├── security.py      # Password hashing, JWT tokens
 │   │   │   └── dependencies.py  # FastAPI dependencies (get_current_user, get_db)
 │   │   ├── core/
-│   │   │   ├── config.py        # Pydantic settings (with {{PLACEHOLDER}} system)
-│   │   │   └── db.py            # SQLAlchemy session, Base declarative
+│   │   │   ├── config.py        # Pydantic settings (env vars / api/.env)
+│   │   │   └── db.py            # SQLAlchemy engine, SessionLocal, get_db
 │   │   ├── models/              # SQLAlchemy ORM models
-│   │   │   ├── base.py          # UUIDMixin, TimestampMixin
+│   │   │   ├── base.py          # Base, UUIDMixin, TimestampMixin
 │   │   │   ├── user.py          # User model + OAuthAccount
 │   │   │   └── item.py          # Item example (customize for your domain entity)
 │   │   ├── schemas/             # Pydantic request/response models
@@ -47,7 +50,7 @@ fullstack-boilerplate/
 │   │   │   ├── user.py          # UserRepository
 │   │   │   └── item.py          # ItemRepository
 │   │   ├── services/            # Business logic layer
-│   │   │   ├── auth.py          # AuthService (register, login, password reset)
+│   │   │   ├── auth.py          # AuthService (register, login, profile update; no password reset yet)
 │   │   │   ├── oauth.py         # OAuthService (Google OAuth 2.0)
 │   │   │   └── item.py          # ItemService (CRUD example)
 │   │   └── routers/             # HTTP endpoints
@@ -60,6 +63,7 @@ fullstack-boilerplate/
 │   │   └── versions/            # Generated migrations (auto-generated)
 │   ├── tests/
 │   │   ├── conftest.py          # Pytest fixtures (test_db, client, auth_headers)
+│   ├── healthcheck.py           # Container HEALTHCHECK probe (stdlib only)
 │   │   ├── test_repositories/
 │   │   ├── test_services/
 │   │   └── test_routers/
@@ -83,15 +87,14 @@ fullstack-boilerplate/
 │   ├── next.config.js
 │   ├── .env.example
 │   └── Dockerfile
-├── infra/                       # Infrastructure as Code (optional)
 ├── scripts/
-│   └── customize.sh             # Automated placeholder replacement
+│   ├── customize.sh             # Placeholder replacement + local .env creation
+│   └── test-customize.sh        # Regression test for customize.sh
 ├── .github/workflows/
 │   ├── test.yml                 # Pytest + linting + type checking
-│   └── deploy.yml               # Deployment template
-├── docker-compose.yml           # Local development stack
-├── Makefile                     # Development commands
-├── Makefile.docker              # Docker-compose commands
+│   └── deploy.yml               # Manual placeholder; nothing is deployed
+├── docker-compose.yml           # Local development stack (postgres, api, client)
+├── Makefile                     # Development commands (`make help`)
 ├── README.md                    # User-facing documentation
 ├── CLAUDE_CONTEXT.md            # This file
 └── LICENSE
@@ -101,19 +104,13 @@ fullstack-boilerplate/
 
 ### Placeholder Replacement System
 
-All configuration uses `{{PLACEHOLDER}}` format for automated replacement:
+A few files contain `{{PROJECT_NAME}}` / `{{APP_NAME}}` placeholders (package names in
+`api/pyproject.toml` and `client/package.json`, `api/app/__init__.py`, this file).
+`scripts/customize.sh` replaces them and creates the untracked `api/.env` (with a
+generated `SECRET_KEY`) and `client/.env.local`:
 
-```python
-# api/app/core/config.py
-APP_NAME: str = "{{APP_NAME}}"
-PROJECT_NAME: str = "{{PROJECT_NAME}}"
-
-# Replaced by scripts/customize.sh when setting up new project
-```
-
-After cloning, run:
 ```bash
-./scripts/customize.sh
+./scripts/customize.sh myapp "My App" myapp.com
 ```
 
 ### Model Pattern
@@ -132,10 +129,11 @@ class User(Base, UUIDMixin, TimestampMixin):
 
 ### Service Pattern
 
-Services contain ONLY business logic and use repositories:
+Services contain business logic and use repositories (simplified example; note that
+services currently raise `HTTPException`, which v2 replaces with domain exceptions):
 
 ```python
-# app/services/auth.py
+# app/services/auth.py (simplified)
 class AuthService:
     def __init__(self, user_repo: UserRepository):
         self.user_repo = user_repo
@@ -156,7 +154,8 @@ class AuthService:
 
 ### Repository Pattern
 
-Repositories handle ONLY database access:
+Repositories handle database access. Note: each method currently commits on its own,
+so multi-step operations are not atomic (fixed in v2 with a per-request unit of work).
 
 ```python
 # app/repositories/user.py
@@ -174,10 +173,10 @@ class UserRepository:
 
 ### Router Pattern
 
-Routers use services and handle HTTP concerns only:
+Routers use services and handle HTTP concerns only (simplified example):
 
 ```python
-# app/routers/auth.py
+# app/routers/auth.py (simplified)
 @router.post("/register", status_code=201)
 def register(
     data: RegisterRequest,
@@ -203,16 +202,16 @@ def register(
    ```bash
    git clone <repo> my-project
    cd my-project
-   ./scripts/customize.sh
+   ./scripts/customize.sh my-project "My Project"
    ```
 
-2. **Backend setup:**
+2. **Backend setup** (needs a reachable Postgres, e.g. `docker compose up -d postgres`):
    ```bash
    cd api
    poetry install
-   cp .env.example .env
+   cp .env.example .env   # skip if customize.sh created it
    # Edit .env with your settings
-   poetry run alembic upgrade head
+   # Tables are created by create_all() at startup; there are no migrations yet.
    poetry run uvicorn app.main:app --reload
    ```
 
@@ -232,17 +231,10 @@ def register(
 ### Docker Setup
 
 ```bash
-# Build images
-docker-compose build
-
-# Start services (postgres, api, client)
-docker-compose up -d
-
-# Watch logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
+make up      # docker compose up -d (postgres, api, client)
+make ps      # status, including api health
+make logs    # follow logs
+make down    # stop
 ```
 
 ## Customization Guide
@@ -375,24 +367,16 @@ GOOGLE_CLIENT_SECRET=<your-secret>
 NEXT_PUBLIC_API_URL=https://api.yourdomain.com
 ```
 
-### Docker Deployment
+### Deployment
 
-1. **Push images to registry:**
-   ```bash
-   docker tag my-api:latest registry.example.com/my-api:latest
-   docker push registry.example.com/my-api:latest
-   ```
-
-2. **Deploy with docker-compose:**
-   ```bash
-   docker-compose -f docker-compose.prod.yml up -d
-   ```
+No deployment is implemented. `.github/workflows/deploy.yml` is a manual placeholder
+and there is no production compose file.
 
 ### Production Checklist
 
-- [ ] Change `SECRET_KEY` to a random value
-- [ ] Set `ENVIRONMENT=production` in config
-- [ ] Configure CORS_ORIGINS in settings
+- [ ] Fix the known issues listed in README.md
+- [ ] Set `SECRET_KEY` to a random value (the code falls back to a public default)
+- [ ] Change the hardcoded CORS origins in `api/app/main.py`
 - [ ] Set up HTTPS/SSL
 - [ ] Configure PostgreSQL backups
 - [ ] Set up monitoring & logging
@@ -456,13 +440,15 @@ npm install --save-dev dev-package-name
 - `POST /auth/register` - Register new user
 - `POST /auth/login` - Login (returns JWT token)
 - `GET /auth/me` - Get current user (requires auth)
-- `POST /auth/refresh` - Refresh token (optional)
+- `PATCH /auth/me` - Update profile (requires auth)
+- `GET /auth/google/login` - Returns the Google authorization URL
+- `GET /auth/google/callback` - OAuth callback; redirects to `FRONTEND_URL/auth/callback?token=...` (that page does not exist in the client yet)
 
 ### Items (Example CRUD)
 - `GET /items` - List items (requires auth)
 - `POST /items` - Create item (requires auth)
 - `GET /items/{id}` - Get item (requires auth)
-- `PUT /items/{id}` - Update item (requires auth)
+- `PATCH /items/{id}` - Update item (requires auth)
 - `DELETE /items/{id}` - Delete item (requires auth)
 
 ## Frontend Architecture
@@ -505,7 +491,7 @@ git push origin feature/your-feature
 ## Troubleshooting
 
 ### Database Connection Error
-- Ensure PostgreSQL is running: `docker-compose up postgres`
+- Ensure PostgreSQL is running: `docker compose up -d postgres`
 - Check DATABASE_URL in .env
 - Verify migrations: `alembic current`
 
@@ -515,7 +501,7 @@ git push origin feature/your-feature
 - Verify SECRET_KEY matches between backend and token generation
 
 ### CORS Errors
-- Check CORS_ORIGINS in `api/app/core/config.py`
+- CORS origins are hardcoded in `api/app/main.py`
 - Frontend URL must be in allowed origins
 - In development, should be `["http://localhost:3000"]`
 
@@ -539,20 +525,18 @@ git push origin feature/your-feature
 
 ## Performance Considerations
 
-- Database queries use indexes on frequently filtered columns
-- JWT tokens cached in browser localStorage
+- JWT tokens are stored in browser localStorage
 - Frontend uses Next.js built-in code splitting
-- API caching headers configured for static responses
-- Database connection pooling enabled
+- SQLAlchemy's default connection pool is used (`pool_pre_ping=True`)
 
 ## Security Notes
 
-- All passwords hashed with bcrypt
-- JWT tokens for stateless authentication
-- CORS configured to prevent unauthorized access
+- Passwords hashed with bcrypt
+- Stateless 7-day JWT access tokens (no refresh tokens, revocation or rate limiting yet)
+- CORS origins hardcoded to localhost in `api/app/main.py`
 - SQL injection prevented by SQLAlchemy ORM
-- XSS prevented by React's JSX escaping
-- CSRF protection via SameSite cookie policy
+- XSS mitigated by React's JSX escaping (but tokens in localStorage are readable by any XSS)
+- No cookies are used, so there is no CSRF protection to speak of; see README.md known issues
 
 ## License
 

@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # PostgreSQL Database
   postgres:
@@ -43,20 +41,21 @@ services:
 
   # Next.js Frontend
   client:
+    # Runs the production build (`next start`); rebuild to pick up changes
+    # (`docker compose up -d --build client`), or use `npm run dev` in client/.
     build:
       context: ./client
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* values are inlined by `next build`, so they are build
+      # args, not runtime env. The browser uses this URL, so it must be
+      # host-reachable (not the in-network `http://api:8000`).
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     container_name: boilerplate-client
-    environment:
-      NEXT_PUBLIC_API_URL: http://api:8000
     ports:
       - "3000:3000"
     depends_on:
       - api
-    volumes:
-      - ./client:/app
-      - /app/node_modules
-      - /app/.next
 
 volumes:
   postgres_data:

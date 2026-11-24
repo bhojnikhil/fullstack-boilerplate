@@ -7,6 +7,12 @@ FROM base AS builder
 COPY package*.json ./
 RUN npm ci
 
+# NEXT_PUBLIC_* values are inlined into the bundle by `next build`, so the
+# public API URL must be provided at build time (env files are excluded from
+# the build context). It must be reachable from the user's browser.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
 COPY . .
 RUN npm run build
 
