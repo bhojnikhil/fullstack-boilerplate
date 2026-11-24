@@ -10,8 +10,9 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "format": "prettier --write apps/web packages",
-    "format:check": "prettier --check apps/web packages"
+    "test": "turbo run test",
+    "format": "prettier --write apps/web apps/mobile packages",
+    "format:check": "prettier --check apps/web apps/mobile packages"
   },
   "prettier": "@repo/config/prettier",
   "devDependencies": {
