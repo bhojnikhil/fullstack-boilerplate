@@ -1,7 +1,11 @@
-# Keep secrets, local state and build output out of the build context / image.
-# Patterns are relative to this directory; `**/` makes them recursive.
-# NEXT_PUBLIC_API_URL is passed as a build arg (see Dockerfile), not via .env files.
+# Build context is the repository root; allowlist only what the web build needs.
 # Regression test: scripts/test-dockerignore.sh
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/web
+!packages/config
 
 # --- Secrets (mirrors the root .gitignore) ----------------------------------
 **/.env
@@ -26,8 +30,10 @@
 **/node_modules
 **/.next
 **/out
+**/.turbo
 **/coverage
 **/*.tsbuildinfo
+**/next-env.d.ts
 **/npm-debug.log*
 
 # --- OS / editor ----------------------------------------------------------------
