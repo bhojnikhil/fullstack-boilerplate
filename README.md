@@ -114,6 +114,29 @@ Docker Compose sets the API's environment in `docker-compose.yml` and does **not
 
 Ports 5432, 8000 and 3000 must be free.
 
+## Upgrading an existing checkout
+
+One-time steps when updating a checkout or deployment from before the monorepo layout
+(Phase 2):
+
+1. **Compose: the `client` service is now `web`.** A container from the old `client`
+   service is left running as an orphan and keeps port 3000, so `web` fails with
+   `port is already allocated`. Remove it once, keeping the database volume:
+
+   ```bash
+   docker compose up -d --build --remove-orphans
+   ```
+
+   (`--remove-orphans` only removes containers of services that no longer exist. It does
+   not touch volumes, so the Postgres data in `postgres_data` is kept. Don't add `-v`.)
+
+2. **Database URLs: the driver is now psycopg 3.** `psycopg2` is no longer installed. A
+   `DATABASE_URL` with an explicit `postgresql+psycopg2://` prefix (in `.env` files,
+   compose overrides, CI or deployment secrets) now fails at startup and in Alembic with
+   `No module named 'psycopg2'`. Change the prefix to `postgresql+psycopg://`, or use
+   plain `postgresql://`, which selects psycopg 3. Plain `postgresql://` URLs need no
+   change.
+
 ## Host development
 
 Host-side commands (`make setup`, `make test`, `make lint`, `make dev`, ...) need:
