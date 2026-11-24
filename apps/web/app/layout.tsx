@@ -1,16 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { appName } from "@/lib/public-settings";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Providers } from "./providers";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: {
-    default: "Boilerplate App",
-    template: "%s | Boilerplate App",
-  },
-  description: "A full-stack starter built with Next.js and FastAPI.",
-};
+// Render the shell and metadata with the running server’s app name.
+export const dynamic = "force-dynamic";
+
+export function generateMetadata(): Metadata {
+  const name = appName("Full-stack starter");
+  return {
+    title: { default: name, template: `%s | ${name}` },
+    description: "A full-stack starter built with Next.js and FastAPI.",
+  };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -27,7 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <header className="border-b bg-card">
               <div className="mx-auto flex min-h-16 w-full max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-3 sm:px-8">
                 <Link href="/" className="text-lg font-bold tracking-tight">
-                  Boilerplate App
+                  {appName("Full-stack starter")}
                 </Link>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                   <nav aria-label="Main navigation" className="flex gap-4 text-sm">

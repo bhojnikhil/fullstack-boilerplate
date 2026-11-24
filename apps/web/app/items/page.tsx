@@ -18,6 +18,7 @@ export default function ItemsPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
+  const [failureCount, setFailureCount] = useState(0);
 
   const loadItems = async (cursor?: string) => {
     const setLoading = cursor ? setIsLoadingMore : setIsLoading;
@@ -50,6 +51,7 @@ export default function ItemsPage() {
     e.preventDefault();
     if (!title.trim()) {
       setError("Title is required");
+      setFailureCount((count) => count + 1);
       return;
     }
 
@@ -61,6 +63,7 @@ export default function ItemsPage() {
       await loadItems();
     } catch (err) {
       setError("Failed to create item");
+      setFailureCount((count) => count + 1);
       console.error(err);
     }
   };
@@ -114,7 +117,7 @@ export default function ItemsPage() {
                 id="description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="min-h-24 w-full rounded-md border border-input px-3 py-2"
+                className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring md:text-sm dark:bg-input/30"
               />
             </div>
             <Button type="submit" disabled={isLoadingMore}>
@@ -124,7 +127,7 @@ export default function ItemsPage() {
         </div>
 
         <div className="grid gap-4">
-          <FormError message={error} />
+          <FormError message={error} failureCount={failureCount} />
           {isLoading ? (
             <div className="rounded-xl border bg-card p-5">Loading items...</div>
           ) : items.length === 0 ? (

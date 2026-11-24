@@ -6,6 +6,7 @@ import { Providers } from "@/app/providers";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 it("defaults to the system scheme, remembers a choice, and follows system changes", async () => {
+  const consoleError = vi.spyOn(console, "error");
   window.localStorage.clear();
   let prefersDark = true;
   const listeners = new Set<(event: { matches: boolean }) => void>();
@@ -51,4 +52,5 @@ it("defaults to the system scheme, remembers a choice, and follows system change
     listeners.forEach((listener) => listener({ matches: false }));
   });
   expect(document.documentElement).toHaveClass("light");
+  expect(consoleError).not.toHaveBeenCalled();
 });

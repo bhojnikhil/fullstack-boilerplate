@@ -14,3 +14,13 @@ services:
       SECRET_KEY: ${SMOKE_SECRET_KEY:-}
       TRUSTED_HOSTS: '["api.example.com"]'
     volumes: !reset []
+  web:
+    env_file: !reset []
+    environment:
+      WEB_LEGAL_APP_NAME: Compose runtime smoke app
+      WEB_SUPPORT_EMAIL: deletion@smoke.example.com
+      ANDROID_PACKAGE_NAME: com.example.smoke
+      ANDROID_SHA256_CERT_FINGERPRINTS: "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+      IOS_TEAM_ID: abcde12345
+      IOS_BUNDLE_ID: com.example.smoke
+      IOS_APPLINK_PATHS: /verify-email,/reset-password,/invite/*

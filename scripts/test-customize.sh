@@ -38,6 +38,10 @@ cat > apps/web/package.json <<'EOF'
 EOF
 cat > apps/web/.env.example <<'EOF'
 NEXT_PUBLIC_API_URL=http://localhost:8000
+_WEB_APP_NAME_QUOTE='"'
+_WEB_APP_NAME_BACKSLASH=\
+WEB_LEGAL_APP_NAME="{{APP_NAME}}"
+WEB_LEGAL_DOMAIN={{DOMAIN}}
 EOF
 cat > README.md <<'EOF'
 Visit https://{{DOMAIN}}
@@ -48,7 +52,7 @@ cat > apps/web/node_modules/some-pkg/package.json <<'EOF'
 EOF
 
 # ---- Run ----------------------------------------------------------------------
-APP_NAME='Acme & Sons | Co/Ltd'
+APP_NAME='Acme & Sons | $Cash "Co/Ltd" \ Studio'
 ./scripts/customize.sh acme-app "$APP_NAME" acme.example.com >/dev/null
 
 # 1. No template placeholders remain in source files (vendored dirs excluded).
@@ -73,6 +77,21 @@ grep -qx 'SECRET_KEY={{GENERATE_SECRET_KEY}}' apps/api/.env.example \
     || fail "apps/api/.env.example was modified (a secret would be committed)"
 grep -qE '^SECRET_KEY=[0-9a-f]{64}$' apps/api/.env || fail "apps/api/.env has no generated SECRET_KEY"
 [ -f apps/web/.env.local ] || fail "apps/web/.env.local not created"
+grep -qxF 'WEB_LEGAL_APP_NAME="Acme & Sons | \$Cash ${_WEB_APP_NAME_QUOTE}Co/Ltd${_WEB_APP_NAME_QUOTE} ${_WEB_APP_NAME_BACKSLASH} Studio"' apps/web/.env.local \
+    || fail "WEB_LEGAL_APP_NAME was not escaped for dotenv"
+if docker compose version >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    cat > compose.yml <<'EOF'
+services:
+  web:
+    image: scratch
+    env_file: apps/web/.env.local
+EOF
+    # Compose escapes literal dollars when serializing its resolved model.
+    Cash=expense docker compose -f compose.yml config --format json | jq -e --arg name "$APP_NAME" \
+        '.services.web.environment.WEB_LEGAL_APP_NAME | gsub("\\$\\$"; "$") == $name' >/dev/null \
+        || fail "Compose did not resolve the original app name"
+fi
+
 
 # 5. Idempotent: a second run changes nothing (including the secret).
 snapshot() { find . -type f -print0 | sort -z | xargs -0 shasum | shasum; }

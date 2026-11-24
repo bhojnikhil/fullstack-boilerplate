@@ -15,6 +15,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
+  const [failureCount, setFailureCount] = useState(0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,6 +23,7 @@ export default function RegisterPage() {
 
     if (password !== confirmPassword) {
       setFormError("Passwords do not match");
+      setFailureCount((count) => count + 1);
       return;
     }
 
@@ -30,6 +32,7 @@ export default function RegisterPage() {
       router.push("/items");
     } catch {
       setFormError("Registration failed. Please try again.");
+      setFailureCount((count) => count + 1);
     }
   };
 
@@ -74,7 +77,7 @@ export default function RegisterPage() {
           required
         />
 
-        <FormError message={error || formError} />
+        <FormError message={error || formError} failureCount={failureCount} />
 
         <Button type="submit" disabled={isLoading} className="w-full">
           {isLoading ? "Registering..." : "Register"}

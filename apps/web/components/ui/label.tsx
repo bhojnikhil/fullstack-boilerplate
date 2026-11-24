@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Root } from "@radix-ui/react-label";
-import { cn } from "cn";
+import { cn } from "@/lib/utils";
 
 function Label({ className, ...props }: React.ComponentProps<typeof Root>) {
   return (

@@ -55,8 +55,21 @@ it("displays unfilled legal details and links to the deletion page", () => {
 });
 
 it("shows in-app guidance and a usable email link for requests without the app", () => {
+  vi.stubEnv("WEB_LEGAL_APP_NAME", "Acme App");
   vi.stubEnv("WEB_SUPPORT_EMAIL", "support+deletion@example.com");
   render(<AccountDeletionPage />);
+  expect(screen.getByText("Template.", { exact: true })).toBeVisible();
+  expect(screen.getByText(/your Acme App account/)).toBeVisible();
+  expect(screen.getByText(/\[Add the in-app steps/)).toBeVisible();
+  expect(
+    screen.getByRole("heading", { name: "Data deleted or retained" }),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/\[List the account and associated data deleted/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/why it is retained, and the retention period/),
+  ).toBeVisible();
   expect(
     screen.getByRole("heading", { name: "Delete your account in the app" }),
   ).toBeVisible();
@@ -75,8 +88,20 @@ it.each([undefined, "invalid@example.com?bcc=another@example.com"])(
   "shows the unconfigured request state when the mailbox is %s",
   (email) => {
     vi.stubEnv("WEB_SUPPORT_EMAIL", email);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     render(<AccountDeletionPage />);
-    expect(screen.getByText(/support email has yet to be configured/)).toBeVisible();
+    expect(screen.getByText("Deletion requests are unavailable.")).toBeVisible();
     expect(screen.queryByRole("link")).toBeNull();
   },
 );
+
+it("logs the missing mailbox once for repeated account deletion renders", async () => {
+  vi.resetModules();
+  const { default: Page } = await import("@/app/account-deletion/page");
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  render(<Page />);
+  render(<Page />);
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("WEB_SUPPORT_EMAIL"),
+  );
+});

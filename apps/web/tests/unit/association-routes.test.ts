@@ -10,18 +10,21 @@ beforeEach(() => {
   vi.stubEnv("ANDROID_SHA256_CERT_FINGERPRINTS", undefined);
   vi.stubEnv("IOS_TEAM_ID", undefined);
   vi.stubEnv("IOS_BUNDLE_ID", undefined);
+  vi.stubEnv("IOS_APPLINK_PATHS", undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 it("serves all configured Android signing certificates as JSON", async () => {
   vi.stubEnv("ANDROID_PACKAGE_NAME", " com.example.my_app ");
   vi.stubEnv(
     "ANDROID_SHA256_CERT_FINGERPRINTS",
-    ` ${firstFingerprint.toLowerCase()}, ${secondFingerprint} `,
+    ` ${firstFingerprint.toLowerCase()}, ${secondFingerprint},, ${firstFingerprint}, `,
   );
 
   const response = getAndroid();
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toMatch(/^application\/json\b/);
+  expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
   await expect(response.json()).resolves.toEqual([
     {
       relation: ["delegate_permission/common.handle_all_urls"],
@@ -38,6 +41,7 @@ it.each([
   [undefined, firstFingerprint],
   ["com.example.my_app", undefined],
   ["com.example.my_app", `${firstFingerprint},BAD`],
+  ["com.example.my_app", " , ,"],
   ["com/invalid", firstFingerprint],
 ])(
   "returns 404 for missing or invalid Android settings (%s, %s)",
@@ -49,12 +53,13 @@ it.each([
 );
 
 it("serves the Apple app ID and link scope as JSON", async () => {
-  vi.stubEnv("IOS_TEAM_ID", " ABCDE12345 ");
+  vi.stubEnv("IOS_TEAM_ID", " abcde12345 ");
   vi.stubEnv("IOS_BUNDLE_ID", " com.example.my-app ");
 
   const response = getApple();
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toMatch(/^application\/json\b/);
+  expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
   await expect(response.json()).resolves.toEqual({
     applinks: {
       details: [
@@ -73,4 +78,55 @@ it.each([
   vi.stubEnv("IOS_TEAM_ID", teamId);
   vi.stubEnv("IOS_BUNDLE_ID", bundleId);
   expect(getApple().status).toBe(404);
+});
+
+it("uses the configured Apple paths, keeping each unique component in order", async () => {
+  vi.stubEnv("IOS_TEAM_ID", "ABCDE12345");
+  vi.stubEnv("IOS_BUNDLE_ID", "com.example.my-app");
+  vi.stubEnv(
+    "IOS_APPLINK_PATHS",
+    " /verify-email, /reset-password, /invite/*, /verify-email, ",
+  );
+
+  const response = getApple();
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({
+    applinks: {
+      details: [
+        {
+          components: [
+            { "/": "/verify-email" },
+            { "/": "/reset-password" },
+            { "/": "/invite/*" },
+          ],
+        },
+      ],
+    },
+  });
+});
+
+it.each([
+  "verify-email",
+  "//other.example/app",
+  "/app?reset",
+  "/app/../outside",
+  ", ,",
+])("rejects a malformed configured Apple path list (%s)", (paths) => {
+  vi.stubEnv("IOS_TEAM_ID", "ABCDE12345");
+  vi.stubEnv("IOS_BUNDLE_ID", "com.example.my-app");
+  vi.stubEnv("IOS_APPLINK_PATHS", paths);
+  expect(getApple().status).toBe(404);
+});
+
+it("warns once per invalid setting, without logging missing settings or their values", async () => {
+  vi.resetModules();
+  const { GET } = await import("@/app/.well-known/apple-app-site-association/route");
+  vi.stubEnv("IOS_TEAM_ID", "invalid-team");
+  vi.stubEnv("IOS_APPLINK_PATHS", "invalid-path");
+  expect(GET().status).toBe(404);
+  expect(GET().status).toBe(404);
+  expect(vi.mocked(console.warn).mock.calls).toEqual([
+    ["[web] IOS_TEAM_ID has an invalid value."],
+    ["[web] IOS_APPLINK_PATHS has an invalid value."],
+  ]);
 });

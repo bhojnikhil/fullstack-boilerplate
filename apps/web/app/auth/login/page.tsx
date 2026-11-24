@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [formError, setFormError] = useState("");
+  const [failureCount, setFailureCount] = useState(0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,6 +24,7 @@ export default function LoginPage() {
       router.push("/items");
     } catch {
       setFormError("Login failed. Please try again.");
+      setFailureCount((count) => count + 1);
     }
   };
 
@@ -49,7 +51,7 @@ export default function LoginPage() {
           required
         />
 
-        <FormError message={error || formError} />
+        <FormError message={error || formError} failureCount={failureCount} />
 
         <Button type="submit" disabled={isLoading} className="w-full">
           {isLoading ? "Logging in..." : "Login"}

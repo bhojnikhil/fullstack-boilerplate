@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { FormError, TextField } from "@/components/form";
@@ -22,8 +23,36 @@ it("associates the field label, hint, and error with its input", () => {
   );
 });
 
-it("moves focus to a new form error", () => {
+it("announces a new form error and re-announces the same error after another failure", () => {
   const { rerender } = render(<FormError />);
-  rerender(<FormError message="Sign-in failed." />);
-  expect(screen.getByText("Sign-in failed.")).toHaveFocus();
+  const alert = screen.getByRole("alert");
+  expect(alert).toBeEmptyDOMElement();
+
+  rerender(<FormError message="Sign-in failed." failureCount={1} />);
+  const firstMessage = screen.getByText("Sign-in failed.");
+  expect(alert).toContainElement(firstMessage);
+  expect(firstMessage.parentElement).toHaveFocus();
+
+  rerender(<FormError message="Sign-in failed." failureCount={2} />);
+  const repeatedMessage = screen.getByText("Sign-in failed.");
+  expect(firstMessage).not.toBeInTheDocument();
+  expect(alert).toContainElement(repeatedMessage);
+  expect(repeatedMessage.parentElement).toHaveFocus();
+});
+
+it("does not move focus to a stale error on mount or an unrelated rerender", () => {
+  const staleError = (
+    <StrictMode>
+      <FormError message="Sign-in failed." />
+    </StrictMode>
+  );
+  const { rerender } = render(staleError);
+  expect(screen.getByRole("alert")).toHaveTextContent("Sign-in failed.");
+  expect(document.body).toHaveFocus();
+  rerender(
+    <StrictMode>
+      <FormError message="Sign-in failed." />
+    </StrictMode>,
+  );
+  expect(document.body).toHaveFocus();
 });

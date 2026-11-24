@@ -39,20 +39,35 @@ export function TextField({
   );
 }
 
-export function FormError({ message }: { message?: string | null }) {
+export function FormError({
+  message,
+  failureCount = 0,
+}: {
+  message?: string | null;
+  failureCount?: number;
+}) {
   const summary = useRef<HTMLParagraphElement>(null);
+  const previous = useRef({ message, failureCount });
 
   useEffect(() => {
-    if (message) summary.current?.focus();
-  }, [message]);
+    const changed =
+      previous.current.message !== message ||
+      previous.current.failureCount !== failureCount;
+    previous.current = { message, failureCount };
+    if (message && changed) summary.current?.focus();
+  }, [message, failureCount]);
 
-  return message ? (
-    <p
-      ref={summary}
-      tabIndex={-1}
-      className="rounded-md border border-destructive/40 p-3 text-sm text-destructive"
-    >
-      {message}
-    </p>
-  ) : null;
+  return (
+    <div role="alert" aria-atomic="true" className="empty:sr-only">
+      {message && (
+        <p
+          ref={summary}
+          tabIndex={-1}
+          className="rounded-md border border-destructive/40 p-3 text-sm text-destructive"
+        >
+          <span key={failureCount}>{message}</span>
+        </p>
+      )}
+    </div>
+  );
 }
