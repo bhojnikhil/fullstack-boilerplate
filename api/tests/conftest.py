@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.auth.security import hash_password
 from app.core.db import get_db
@@ -12,8 +13,9 @@ from app.main import app
 from app.models.base import Base
 from app.models.user import User
 
-# Use in-memory SQLite for testing
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+# In-memory SQLite: nothing is written to disk. StaticPool keeps the single
+# in-memory database alive and shared across connections for the session.
+TEST_SQLALCHEMY_DATABASE_URL = "sqlite://"
 
 
 @pytest.fixture(scope="session")
@@ -22,6 +24,7 @@ def test_db_engine():
     engine = create_engine(
         TEST_SQLALCHEMY_DATABASE_URL,
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     yield engine

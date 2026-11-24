@@ -1,0 +1,19 @@
+# Keep secrets, local state and caches out of the build context / image.
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
