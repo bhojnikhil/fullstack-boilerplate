@@ -23,6 +23,8 @@ jobs:
       run:
         working-directory: apps/api
 
+    # Only for the app's startup create_all() hook: tests/conftest.py runs the
+    # suite itself on in-memory SQLite (moving it to Postgres is Phase 3).
     services:
       postgres:
         image: postgres:16.16-alpine

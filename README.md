@@ -151,7 +151,7 @@ Host-side commands (`make setup`, `make test`, `make lint`, `make dev`, ...) nee
 ```bash
 make setup                      # uv sync --locked + pnpm install --frozen-lockfile
 docker compose up -d postgres   # or `make up`
-make test                       # API tests against the compose Postgres (localhost:5432)
+make test                       # API tests (SQLite in memory; startup hook needs Postgres)
 make dev                        # postgres + api in Docker, web dev server on the host
 ```
 
@@ -218,9 +218,11 @@ docker compose up -d postgres
 make test
 ```
 
-API tests use an in-memory SQLite database through a dependency override. The app's
-startup hook still runs `create_all()` against `DATABASE_URL`, so a reachable Postgres is
-required (CI provides one). There are no frontend tests yet.
+API tests use an in-memory SQLite database through a dependency override
+(`apps/api/tests/conftest.py`), so they do **not** exercise Postgres or the psycopg 3
+driver. The app's startup hook still runs `create_all()` against `DATABASE_URL`, so a
+reachable Postgres is required (CI provides one for that reason only). Moving the suite
+to Postgres is planned for the next phase. There are no frontend tests yet.
 
 ## Adding a domain entity
 
