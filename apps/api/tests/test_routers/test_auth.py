@@ -82,4 +82,5 @@ def test_get_current_user_unauthorized(client: TestClient):
     """Test getting current user without auth."""
     response = client.get("/auth/me")
 
-    assert response.status_code == 403
+    # Missing credentials: 401 + WWW-Authenticate (older FastAPI returned 403).
+    assert response.status_code == 401

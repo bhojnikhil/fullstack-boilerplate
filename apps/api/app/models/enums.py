@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class OAuthProvider(str, Enum):
+class OAuthProvider(StrEnum):
     """OAuth provider enumeration."""
 
     GOOGLE = "google"

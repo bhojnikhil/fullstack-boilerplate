@@ -1,35 +1,38 @@
-[tool.poetry]
-name = "{{PROJECT_NAME}}-api"
+[project]
+name = "api"
 version = "1.0.0"
 description = "Full-stack boilerplate API"
-authors = ["Your Name <you@example.com>"]
 license = "MIT"
-packages = [{include = "app"}]
+requires-python = "==3.13.*"
+# Exact pins; the full resolution is locked in uv.lock.
+dependencies = [
+    "alembic==1.20.1",
+    # Held at 4.x: 5.x raises on passwords over 72 bytes (would surface as 500s).
+    # bcrypt is replaced by argon2id in the auth redesign.
+    "bcrypt==4.3.0",
+    "fastapi==0.165.0",
+    "httpx==0.28.1",
+    "psycopg[binary]==3.3.9",
+    "pydantic[email]==2.14.4",
+    "pydantic-settings==2.16.3",
+    "python-jose[cryptography]==3.5.0",
+    "sqlalchemy==2.1.9",
+    "uvicorn[standard]==0.54.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.13"
-fastapi = "^0.115.0"
-uvicorn = {extras = ["standard"], version = "^0.32.0"}
-sqlalchemy = "^2.0.0"
-alembic = "^1.14.0"
-psycopg2-binary = "^2.9.0"
-pydantic = {extras = ["email"], version = "^2.0.0"}
-pydantic-settings = "^2.0.0"
-python-dotenv = "^1.0.0"
-python-jose = {extras = ["cryptography"], version = "^3.3.0"}
-bcrypt = "^4.0.0"
-httpx = "^0.27.0"
+[dependency-groups]
+dev = [
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.5.0",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.6",
+]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-pytest-asyncio = "^0.24.0"
-pytest-cov = "^6.0.0"
-ruff = "^0.8.0"
-mypy = "^1.13.0"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.uv]
+# This is an application, not a library: install dependencies only.
+package = false
+required-version = "==0.13.9"
 
 # Pytest Configuration
 [tool.pytest.ini_options]
@@ -38,6 +41,7 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = [
     "-v",
     "--strict-markers",

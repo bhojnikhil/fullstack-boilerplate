@@ -1,7 +1,7 @@
 """Container healthcheck probe.
 
 Used by the Dockerfile ``HEALTHCHECK``. It must only use the standard library:
-the runtime image must not need build tools (Poetry, pip extras, ``requests``)
+the runtime image must not need build tools (uv, pip, ``requests``)
 for the probe to work.
 
 Exit code 0 means healthy (HTTP 2xx within the timeout); anything else is
