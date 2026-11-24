@@ -47,14 +47,19 @@ A starter monorepo with a **FastAPI** backend (`api/`) and a **Next.js 15** fron
 - No Google sign-in button and no frontend tests yet.
 
 **Tooling**
-- `docker-compose.yml`: `postgres`, `api` (hot reload, source mounted), `client`.
-- The API image has a `HEALTHCHECK` (`api/healthcheck.py`, stdlib-only).
+- `docker-compose.yml`: `postgres`, `api` (hot reload, source mounted), `client` (production
+  build via `next start`; rebuild to see changes, or run `npm run dev` in `client/`).
+- The API image has a `HEALTHCHECK` (`api/healthcheck.py`: stdlib-only, requires a 2xx from
+  `/health` itself, does not follow redirects).
+- `api/.dockerignore` and `client/.dockerignore` keep env files, keys and local DBs (at any
+  depth) out of images.
 - `Makefile` wrapping Docker Compose (run `make help`).
 - GitHub Actions (`.github/workflows/test.yml`):
   - backend: ruff, mypy (not strict mode), pytest with a coverage report (no threshold);
   - frontend: `next lint`, `tsc --noEmit`, `next build`;
-  - `scripts/test-customize.sh`;
-  - Docker images build, and the API container must report healthy.
+  - `scripts/test-customize.sh` and `scripts/test-dockerignore.sh`;
+  - Docker images build, and the API container, run as packaged (no source mount, via
+    `docker-compose.smoke.yml`), must report healthy. Locally: `make smoke`.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
 
@@ -124,7 +129,7 @@ CORS origins are hardcoded in `api/app/main.py` (`http://localhost:3000`,
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
 
 ## Common commands
 
@@ -142,6 +147,7 @@ make migrate         # alembic upgrade head (no migrations exist yet)
 make migration NAME='add_column'
 make db-shell        # psql into the dev database
 make fresh           # wipe the DB volume, rebuild, start
+make smoke           # build + start postgres/api as packaged, wait for healthy
 ```
 
 Frontend targets run on the host and need `npm ci` in `client/` first.
@@ -168,7 +174,8 @@ client/
 └── lib/                 # api.ts (axios), auth-store.ts (zustand)
 scripts/
 ├── customize.sh         # placeholder replacement + local .env creation
-└── test-customize.sh    # regression test for customize.sh
+├── test-customize.sh    # regression test for customize.sh
+└── test-dockerignore.sh # regression test for the .dockerignore files
 ```
 
 ## Testing

@@ -8,7 +8,7 @@ CYAN := \033[0;36m
 GREEN := \033[0;32m
 NC := \033[0m
 
-.PHONY: help up down logs ps build fresh migrate migration db-shell \
+.PHONY: help up down logs ps build fresh smoke migrate migration db-shell \
 	test test-coverage lint lint-backend lint-frontend \
 	typecheck typecheck-backend typecheck-frontend \
 	format format-backend format-frontend
@@ -45,6 +45,10 @@ fresh: ## Full reset: stop, delete the database volume, rebuild, start, migrate
 	$(COMPOSE) up -d
 	$(COMPOSE) exec api alembic upgrade head
 	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
+
+smoke: ## Build images, start postgres + api as packaged (no source mount), wait for healthy
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait --wait-timeout 120 postgres api
+	@printf "$(GREEN)✓ api is healthy$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 
