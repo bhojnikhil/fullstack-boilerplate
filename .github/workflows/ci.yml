@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # Any base branch, so stacked PRs (e.g. v2/* phases) are tested too.
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Third-party actions are pinned to full commit SHAs (tag in the comment).
+
+jobs:
+  api:
+    name: api (ruff, mypy, pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+
+    services:
+      postgres:
+        image: postgres:16.16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: Lint (ruff check)
+        run: uv run --locked ruff check .
+
+      - name: Format (ruff format --check)
+        run: uv run --locked ruff format --check .
+
+      - name: Type check (mypy)
+        run: uv run --locked mypy app healthcheck.py
+
+      - name: Tests (pytest)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        run: uv run --locked pytest
+
+  web:
+    name: web (prettier, eslint, tsc, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Version comes from "packageManager" in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          cache: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Format (prettier --check)
+        run: pnpm format:check
+
+      - name: Lint, type check, build (turbo)
+        run: pnpm turbo run lint typecheck build
+
+  scripts:
+    name: scripts (customize.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs scripts/customize.sh on a throwaway fixture (GNU sed on Linux; the
+      # BSD sed path is exercised on macOS).
+      - name: Test customize.sh
+        run: ./scripts/test-customize.sh
+
+  docker:
+    name: docker (images, smoke test)
+    runs-on: ubuntu-latest
+    needs: [api, web]
+    env:
+      # Smoke overlay: the api runs its production `runtime` target with no
+      # source mount, so the checks below exercise what is packaged.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.smoke.yml
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Test build-context ignore files
+        run: ./scripts/test-dockerignore.sh
+
+      - name: Build images (api runtime target, web)
+        run: docker compose build
+
+      - name: Build api dev target (used by docker-compose.yml)
+        run: docker build --target dev apps/api
+
+      # --wait fails if any service does not become healthy.
+      - name: Start postgres, api, web and wait for healthy
+        run: docker compose up -d --wait --wait-timeout 180 postgres api web
+
+      - name: Assert images run as packaged (no mounts, non-root)
+        run: |
+          for svc in api web; do
+            id=$(docker compose ps -q "$svc")
+            mounts=$(docker inspect --format '{{json .Mounts}}' "$id")
+            user=$(docker inspect --format '{{.Config.User}}' "$id")
+            echo "$svc: mounts=$mounts user=$user"
+            [ "$mounts" = "[]" ]
+            [ -n "$user" ] && [ "$user" != "root" ] && [ "$user" != "0" ]
+          done
+
+      - name: Show container status
+        if: always()
+        run: |
+          docker compose ps
+          for svc in api web; do
+            docker inspect --format "$svc: {{json .State.Health}}" "$(docker compose ps -q $svc)" || true
+          done
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs api web
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
