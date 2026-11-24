@@ -48,16 +48,25 @@ fullstack-boilerplate/
 │   │   ├── .python-version          # 3.13
 │   │   ├── .env.example
 │   │   └── Dockerfile               # targets: runtime (default, slim, non-root), dev
-│   └── web/                         # Next.js app (workspace package "web")
-│       ├── app/                     # App Router: /, /auth/login, /auth/register, /items
-│       ├── lib/                     # api.ts (axios), auth-store.ts (zustand)
-│       ├── css.d.ts                 # Type declaration for global CSS imports
-│       ├── eslint.config.mjs        # Re-exports @repo/config/eslint/next
-│       ├── next.config.mjs          # output: "standalone"
-│       ├── tsconfig.json            # Extends @repo/config/tsconfig/nextjs.json
-│       ├── .env.example
-│       ├── Dockerfile               # Build context: repo root
-│       └── Dockerfile.dockerignore  # Allowlist for the root build context
+│   ├── web/                         # Next.js app (workspace package "web")
+│   │   ├── app/                     # App Router: /, /auth/login, /auth/register, /items
+│   │   ├── lib/                     # api.ts (axios), auth-store.ts (zustand)
+│   │   ├── css.d.ts                 # Type declaration for global CSS imports
+│   │   ├── eslint.config.mjs        # Re-exports @repo/config/eslint/next
+│   │   ├── next.config.mjs          # output: "standalone"
+│   │   ├── tsconfig.json            # Extends @repo/config/tsconfig/nextjs.json
+│   │   ├── .env.example
+│   │   ├── Dockerfile               # Build context: repo root
+│   │   └── Dockerfile.dockerignore  # Allowlist for the root build context
+│   └── mobile/                      # Expo SDK 58 app (workspace package "mobile"); foundation only
+│       ├── app.config.ts            # Env-driven Expo config (validated); see .env.example
+│       ├── eas.json                 # EAS Build profiles + EAS Update channels
+│       ├── src/app/                 # Expo Router: (auth)/sign-in, sign-up; (app)/items, settings (tabs)
+│       ├── src/components/          # Screen (safe areas), KeyboardAvoidingForm, TextField, Button, NetworkBanner
+│       ├── src/theme/               # Design tokens + useTheme (ADR 0005)
+│       ├── src/lib/                 # env, query client (persisted), network, token storage, API headers
+│       ├── __tests__/, src/**/__tests__/  # Jest + React Native Testing Library (*-test.ts[x])
+│       └── eslint.config.mjs        # Re-exports @repo/config/eslint/expo
 ├── packages/
 │   └── config/                      # @repo/config: tsconfig, ESLint, Prettier
 ├── docs/adr/                        # Architecture decision records
@@ -69,6 +78,7 @@ fullstack-boilerplate/
 │   └── test-check-containers.sh     # Regression test for check-containers.sh (mocked docker)
 ├── .github/workflows/
 │   ├── ci.yml                       # api, web, scripts, docker (smoke) jobs
+│   ├── mobile.yml                   # Path-filtered: prettier, tsc, eslint, jest, expo-doctor
 │   └── deploy.yml                   # Manual placeholder; nothing is deployed
 ├── docker-compose.yml               # postgres, api (dev target), web
 ├── docker-compose.smoke.yml         # Overlay: run images as packaged
@@ -434,6 +444,23 @@ pnpm --filter web add --save-exact --save-dev dev-package-name
 - **Vanilla CSS** (`app/globals.css`): No build-time dependency
 - Simple class-based approach (`.button`, `.card`, `.error`, etc.)
 - Responsive grid layout patterns
+
+## Mobile App (apps/mobile)
+
+Foundation only: placeholder screens, no API calls or auth yet. README.md "Mobile" has
+the run/build instructions and env vars. Conventions:
+
+- Add dependencies with `npx expo install <pkg>` (SDK-compatible versions), then pin the
+  resolved version exactly in `package.json`. Run `pnpm --filter mobile run doctor:expo`.
+- Routes live in `src/app/` only; put components/hooks/libs elsewhere. Tests must not be
+  inside `src/app/` (Expo Router would treat them as routes): use `__tests__/` and the
+  `*-test.ts[x]` naming.
+- Style with `useTheme()` tokens (ADR 0005); no hard-coded colors. Pad screens with
+  `<Screen edges={...}>` (edge-to-edge on Android); wrap forms in `KeyboardAvoidingForm`.
+- Build-time config comes from env in `app.config.ts`; runtime code reads it through
+  `getRuntimeEnv()` (`src/lib/env.ts`), never `process.env`.
+- React Native Testing Library 14: `render`, `renderHook`, `rerender` and `fireEvent.*`
+  return promises; always `await` them.
 
 ## Git Workflow
 
