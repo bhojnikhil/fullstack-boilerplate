@@ -147,7 +147,10 @@ export default function ItemsPage() {
 
             <div>
               {error && (
-                <div className="card" style={{ marginBottom: "1rem", background: "#fee2e2" }}>
+                <div
+                  className="card"
+                  style={{ marginBottom: "1rem", background: "#fee2e2" }}
+                >
                   <span className="error">{error}</span>
                 </div>
               )}

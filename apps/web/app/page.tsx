@@ -33,10 +33,19 @@ export default function Home() {
             <div style={{ marginTop: "2rem" }}>
               <h3>Getting Started</h3>
               <ol>
-                <li>Run migrations: <code>alembic upgrade head</code></li>
-                <li>Start backend: <code>cd api && poetry run uvicorn app.main:app --reload</code></li>
-                <li>Start frontend: <code>cd client && npm run dev</code></li>
-                <li>Visit <code>http://localhost:3000</code></li>
+                <li>
+                  Run migrations: <code>alembic upgrade head</code>
+                </li>
+                <li>
+                  Start backend:{" "}
+                  <code>cd api && poetry run uvicorn app.main:app --reload</code>
+                </li>
+                <li>
+                  Start frontend: <code>cd client && npm run dev</code>
+                </li>
+                <li>
+                  Visit <code>http://localhost:3000</code>
+                </li>
               </ol>
             </div>
           </div>

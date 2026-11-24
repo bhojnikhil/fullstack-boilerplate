@@ -102,8 +102,7 @@ export default function RegisterPage() {
         </form>
 
         <p style={{ marginTop: "1rem", textAlign: "center" }}>
-          Already have an account?{" "}
-          <Link href="/auth/login">Login here</Link>
+          Already have an account? <Link href="/auth/login">Login here</Link>
         </p>
       </div>
     </div>
