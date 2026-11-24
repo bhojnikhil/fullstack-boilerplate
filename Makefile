@@ -59,9 +59,10 @@ fresh: ## Full reset: stop, delete the database volume, rebuild, start
 	$(COMPOSE) up -d --build --wait
 	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
 
-smoke: ## Build and start all services as packaged (no source mount), wait for healthy
+smoke: ## Build + start all services as packaged; require healthy, non-root, no mounts
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait --wait-timeout 180 postgres api web
-	@printf "$(GREEN)✓ postgres, api and web are healthy$(NC) (stop with: make down)\n"
+	COMPOSE_FILE=docker-compose.yml:docker-compose.smoke.yml ./scripts/check-containers.sh api web
+	@printf "$(GREEN)✓ postgres, api and web are healthy, non-root, unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 

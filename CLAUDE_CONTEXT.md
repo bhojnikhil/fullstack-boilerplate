@@ -64,7 +64,9 @@ fullstack-boilerplate/
 ├── scripts/
 │   ├── customize.sh                 # Placeholder replacement + local .env creation
 │   ├── test-customize.sh            # Regression test for customize.sh
-│   └── test-dockerignore.sh         # Regression test for the build-context ignore files
+│   ├── test-dockerignore.sh         # Regression test for the build-context ignore files
+│   ├── check-containers.sh          # Smoke check: containers non-root, no mounts
+│   └── test-check-containers.sh     # Regression test for check-containers.sh (mocked docker)
 ├── .github/workflows/
 │   ├── ci.yml                       # api, web, scripts, docker (smoke) jobs
 │   └── deploy.yml                   # Manual placeholder; nothing is deployed

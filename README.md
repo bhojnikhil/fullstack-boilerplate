@@ -82,10 +82,11 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
     pytest with a coverage report (no threshold);
   - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
     `next build` via Turborepo;
-  - **scripts**: `scripts/test-customize.sh`;
+  - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
-    api and web as packaged (`docker-compose.smoke.yml`: no source mounts) and require
-    all to be healthy and non-root. Locally: `make smoke`.
+    api and web as packaged (`docker-compose.smoke.yml`: no source mounts), require all
+    to be healthy, and run `scripts/check-containers.sh` (effective UID not 0, no
+    mounts). Locally: `make smoke`.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
 
@@ -207,7 +208,7 @@ make migrate                   # alembic upgrade head (no migrations exist yet)
 make migration name=add_column # autogenerate a migration
 make db-shell                  # psql into the dev database
 make fresh                     # wipe the DB volume, rebuild, start
-make smoke                     # build + start all images as packaged, wait for healthy
+make smoke                     # build + start all images as packaged; healthy, non-root, no mounts
 ```
 
 ## Testing
