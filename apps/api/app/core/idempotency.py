@@ -1,5 +1,6 @@
 """Atomic replay of committed authenticated mutations."""
 
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import UUID
@@ -70,18 +71,11 @@ async def begin_idempotency(
     if not 1 <= len(key) <= KEY_MAX_LENGTH or any(not 33 <= ord(char) <= 126 for char in key):
         raise DomainError(ErrorCode.INVALID_IDEMPOTENCY_KEY)
 
-    request_hash = sha256()
-    # Frame each component so one component cannot be confused with part of another.
-    for part in (
-        request.method.encode(),
-        request.url.path.encode(),
-        request.scope["query_string"],
-        request.headers.get("content-type", "").encode(),
-        await request.body(),
-    ):
-        request_hash.update(len(part).to_bytes(8, "big"))
-        request_hash.update(part)
-    digest = request_hash.hexdigest()
+    target = (request.method.encode(), request.url.path.encode(), request.scope["query_string"])
+    content_type = request.headers.get("content-type", "")
+    media_type = content_type.partition(";")[0].strip().lower()
+    body = await request.body()
+    digest = request_digest((*target, media_type.encode(), body))
 
     # Transaction locks work through pgBouncer and release at commit or rollback.
     lock = sha256(b"idempotency:" + user_id.bytes + key.encode("ascii")).digest()[:8]
@@ -91,12 +85,26 @@ async def begin_idempotency(
 
     record = await db.get(IdempotencyRecord, (user_id, key))
     if record is not None and record.expires_at > datetime.now(UTC):
-        if record.request_hash != digest:
-            raise DomainError(ErrorCode.IDEMPOTENCY_MISMATCH)
-        raise ReplayResponseError(record)
+        if record.request_hash == digest:
+            raise ReplayResponseError(record)
+        # Pre-normalization records may still be within their replay window.
+        if content_type != media_type and record.request_hash == request_digest(
+            (*target, content_type.encode(), body)
+        ):
+            raise ReplayResponseError(record)
+        raise DomainError(ErrorCode.IDEMPOTENCY_MISMATCH)
 
     # Defer adding a new record until after the endpoint succeeds. A read or flush
     # during the operation must not persist a record before status/body are known.
     if record is None:
         record = IdempotencyRecord(user_id=user_id, key=key)
     return Idempotency(db, record, digest)
+
+
+def request_digest(parts: Iterable[bytes]) -> str:
+    request_hash = sha256()
+    # Frame each component so one component cannot be confused with part of another.
+    for part in parts:
+        request_hash.update(len(part).to_bytes(8, "big"))
+        request_hash.update(part)
+    return request_hash.hexdigest()

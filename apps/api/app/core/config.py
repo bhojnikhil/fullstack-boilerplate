@@ -1,3 +1,4 @@
+import re
 from typing import Literal, Self
 
 from fastapi import Request
@@ -9,6 +10,7 @@ from sqlalchemy.exc import ArgumentError
 Environment = Literal["development", "test", "staging", "production"]
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/boilerplate"
 LOCAL_SECRET = "dev-secret-key-change-in-production"
+ORIGIN_PATTERN = re.compile(r"https?://(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:.]+\])(?::[0-9]+)?")
 
 
 def postgres_url(value: str) -> URL:
@@ -26,7 +28,7 @@ class DatabaseSettings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
     )
 
-    env: Environment = "development"
+    env: Environment = "production"
     database_url: SecretStr | None = None
     migration_database_url: SecretStr | None = None
 
@@ -55,6 +57,17 @@ class Settings(DatabaseSettings):
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "[::1]"]
     max_request_body_bytes: int = Field(default=1_048_576, gt=0)
 
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, origins: list[str]) -> list[str]:
+        for origin in origins:
+            if not ORIGIN_PATTERN.fullmatch(origin):
+                raise ValueError(
+                    "CORS origins must be explicit HTTP(S) origins (scheme://host[:port])"
+                )
+            HttpUrl(origin)
+        return origins
+
     @field_validator("trusted_hosts")
     @classmethod
     def validate_trusted_hosts(cls, hosts: list[str]) -> list[str]:
@@ -71,9 +84,6 @@ class Settings(DatabaseSettings):
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
-        self.database()
-        if self.migration_database_url:
-            self.database(migration=True)
         if self.env in {"staging", "production"} and (
             len(self.signing_key.strip()) < 32
             or self.signing_key
@@ -83,6 +93,11 @@ class Settings(DatabaseSettings):
             }
         ):
             raise ValueError("SECRET_KEY must be a unique secret of at least 32 characters")
+        if self.env in {"staging", "production"} and "*" in self.trusted_hosts:
+            raise ValueError("TRUSTED_HOSTS cannot contain '*' in staging or production")
+        self.database()
+        if self.migration_database_url:
+            self.database(migration=True)
         if bool(self.google_client_id) != bool(self.google_client_secret.get_secret_value()):
             raise ValueError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together")
         return self

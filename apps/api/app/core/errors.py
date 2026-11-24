@@ -37,7 +37,7 @@ DOMAIN_ERRORS = {
     ErrorCode.INACTIVE_USER: (403, "Account is inactive"),
     ErrorCode.ITEM_NOT_FOUND: (404, "Item not found"),
     ErrorCode.ITEM_FORBIDDEN: (403, "Not authorized to access this item"),
-    ErrorCode.OAUTH_UNAVAILABLE: (500, "Google sign-in is unavailable"),
+    ErrorCode.OAUTH_UNAVAILABLE: (503, "Google sign-in is unavailable"),
     ErrorCode.OAUTH_FAILED: (400, "Google sign-in failed"),
     ErrorCode.INVALID_CURSOR: (422, "Invalid pagination cursor"),
     ErrorCode.NOT_READY: (503, "Service is not ready"),
@@ -93,3 +93,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     return error_response(
         422, "validation_error", "Request validation failed", details={"fields": fields}
     )
+
+
+async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    return error_response(500, "internal_error", "Internal server error")

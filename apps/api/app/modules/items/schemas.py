@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.pagination import Page
+
 
 class ItemCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -29,3 +31,7 @@ class ItemResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ItemPage(Page[ItemResponse]):
+    pass

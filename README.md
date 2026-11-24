@@ -45,9 +45,11 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   and handler names.
 - JSON error envelopes, environment-based CORS and trusted hosts, restrictive response
   headers and a configurable request body limit. Request logs use route templates and
-  include request ID, method, status, duration and the user ID when available.
+  include request ID, method, status, duration and the user ID when available. Exception
+  logs include structured stack frames and exception types, with messages and locals omitted.
 - `GET /health` checks liveness without Postgres. `GET /ready` checks DB connectivity
-  and the applied Alembic revision. Apply migrations separately before serving traffic.
+  and the applied Alembic revision. Both probes accept the platform's Host header,
+  including the container's loopback Host. The host allowlist applies to other routes.
 - Dependencies managed with uv: exact pins in `pyproject.toml`, locked in `uv.lock`
   ([ADR 0001](docs/adr/0001-python-tooling-uv.md)).
 
@@ -77,14 +79,16 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - GitHub Actions (`.github/workflows/ci.yml`), with every third-party action pinned to a
   commit SHA:
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
-    drift check, and pytest on Postgres 16 with a 90% branch-aware coverage gate.
+    drift check, and pytest on Postgres 16 with a 96.46% branch-aware coverage gate.
   - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
     `next build` via Turborepo;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
-    api and web as packaged (`docker-compose.smoke.yml`: no source mounts), require all
-    to be healthy, verify readiness after explicit migrations, and check that the API
-    and web containers run as unprivileged users with no mounts. Locally use `make smoke`.
+    api and web as packaged, and require all to be healthy. The API smoke uses production
+    settings, a temporary signing key and a host allowlist that excludes loopback. It
+    checks HSTS, JSON logs and startup failure without a key. CI checks readiness
+    before and after explicit migrations. The API and web must run as unprivileged
+    users with no mounts. Locally use `make smoke`.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -134,8 +138,10 @@ uv run --locked alembic check
 ```
 
 Stamp only a database that already matches revision `0001`. Test the procedure on a
-restored copy of your backup first. The next migration adds the idempotency table and
-items pagination index.
+restored copy of your backup first. The Postgres regression test creates the frozen
+pre-Alembic schema from `main`, inserts legacy rows, stamps `0001`, upgrades to head
+and checks for drift. Revision `0002` adds the idempotency table and builds the
+items pagination index concurrently.
 
 Use `postgresql://` or `postgresql+psycopg://` URLs. Earlier Compose projects that
 still run a service called `client` can stop that container with
@@ -175,14 +181,14 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `ENV` | `development` | Allowed values are `development`, `test`, `staging`, and `production`. Development uses human-readable request logs. Other environments use JSON logs and send HSTS. |
-| `DATABASE_URL` | Local Compose Postgres from the host | Required in staging and production. Use the Neon pooled URL for the app. |
+| `ENV` | `production` | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS. |
+| `DATABASE_URL` | Local Compose Postgres in development and test | Required in staging and production. Use the Neon pooled URL for the app. |
 | `MIGRATION_DATABASE_URL` | Falls back to `DATABASE_URL` | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`. |
 | `SECRET_KEY` | Local development/test fallback | Set a unique secret of at least 32 characters in staging and production. |
 | `JWT_ALGORITHM` | `HS256` | Signing algorithm. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | JWT lifetime in minutes. |
-| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of permitted browser origins, including scheme and optional port. |
-| `TRUSTED_HOSTS` | `["localhost","127.0.0.1","[::1]"]` | JSON array of permitted hosts without ports. Keep `127.0.0.1` for the default container probe. |
+| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Omit paths, even a trailing slash. |
+| `TRUSTED_HOSTS` | `["localhost","127.0.0.1","[::1]"]` | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host. |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum HTTP body size in bytes, including chunked requests. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Unset | Optional pair. Set both to enable Google OAuth. |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8000/v1/auth/google/callback` | Must match the Google OAuth client configuration. |
@@ -190,8 +196,9 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | `HEALTHCHECK_URL` | `http://127.0.0.1:8000/health` | Optional override for the container probe, which reads the process environment. |
 
 Run the Alembic upgrade with the direct connection before starting new API
-instances. The API checks its own connection and compares the database's applied
-revision with the migration files shipped in the image.
+instances. `/ready` returns 503 if the DB is unreachable, unmigrated or behind the
+image. An unknown revision is treated as newer and logs a warning. During a rolling
+release, keep migrations compatible with instances of the previous release. See [ADR 0004](docs/adr/0004-async-postgres.md).
 
 **Web** (`apps/web/.env.local`):
 
@@ -227,11 +234,12 @@ Pass the returned cursor as `cursor` on the next request. The maximum page size
 is 100 and a null cursor marks the last page.
 
 `POST /v1/items`, `PATCH/DELETE /v1/items/{item_id}` and `PATCH /v1/auth/me` accept an
-optional `Idempotency-Key` of up to 128 visible ASCII characters. Repeat the same
-method, URL, content type and body bytes with the same key and user to replay the
-committed status and response body for up to 24 hours. Reusing the key for a
-different request returns 422. An overlapping request with the same user and key
-returns 409. Failed transactions leave the key available for retry.
+optional `Idempotency-Key` of up to 128 visible ASCII characters. Retry with the
+same user, key, method, path, query string, media type and identical body bytes.
+`Content-Type` parameters such as `charset` are ignored. Preserve the serialized JSON,
+including whitespace and property order. A retry replays the committed status and
+response body for up to 24 hours. Reusing the key for a different request returns
+422. An overlapping request with the same user and key returns 409. Failed transactions leave the key available for retry.
 Expired records can be reused. Periodic cleanup is part of the future jobs phase.
 
 Errors return `{"error": {"code": "...", "message": "...", "details": {}}}`.
@@ -247,7 +255,9 @@ directly, set `ENV=test` and `DATABASE_URL` to that database. The test user need
 permission to create schemas. Each database test applies Alembic to its own schema
 and drops the schema afterward. HTTP tests use httpx's ASGI transport and real
 request transactions. CI applies migrations to its Postgres 16 service, runs
-`alembic check` for schema drift and runs the same suite.
+`alembic check` for schema drift and runs the same suite. Plain pytest, `make test`
+and CI share the 96.46% branch-aware coverage gate in `apps/api/pyproject.toml`,
+with greenlet and thread tracing enabled.
 
 ## Adding a domain entity
 

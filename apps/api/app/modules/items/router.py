@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, status
 from app.core import API_PREFIX
 from app.core.db import RequestSession
 from app.core.errors import ErrorEnvelope
-from app.core.pagination import DEFAULT_PAGE_SIZE, Page, PageCursor, PageSize
+from app.core.pagination import DEFAULT_PAGE_SIZE, PageCursor, PageSize
 from app.modules.auth.dependencies import CurrentUser, Mutation
 from app.modules.items.repository import ItemRepository
-from app.modules.items.schemas import ItemCreate, ItemResponse, ItemUpdate
+from app.modules.items.schemas import ItemCreate, ItemPage, ItemResponse, ItemUpdate
 from app.modules.items.service import ItemService
 
 router = APIRouter(
@@ -36,9 +36,9 @@ async def list_items(
     service: Items,
     limit: PageSize = DEFAULT_PAGE_SIZE,
     cursor: PageCursor = None,
-) -> Page[ItemResponse]:
+) -> ItemPage:
     items, next_cursor = await service.get_user_items(current_user.id, limit, cursor)
-    return Page(
+    return ItemPage(
         items=[ItemResponse.model_validate(item) for item in items], next_cursor=next_cursor
     )
 

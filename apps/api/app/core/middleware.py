@@ -3,14 +3,16 @@ from time import perf_counter
 from uuid import uuid4
 
 import structlog
+from starlette._utils import get_route_path
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Environment
-from app.core.errors import error_response
+from app.core.errors import error_response, internal_error_handler
 
 log = structlog.get_logger()
 REQUEST_ID = "X-Request-Id"
@@ -86,13 +88,12 @@ class ErrorMiddleware:
             await self.app(scope, receive, track_response)
         except Exception as exc:
             # Exception text (including SQL, provider payloads and credentials) stays private.
-            log.error("request_failed", exception_type=type(exc).__name__)
+            log.exception("request_failed")
             if started:
                 # It is too late to send an envelope. Abort the stream without exposing the error.
                 raise RuntimeError("Response stream failed") from None
-            await error_response(500, "internal_error", "Internal server error")(
-                scope, receive, send
-            )
+            response = await internal_error_handler(Request(scope), exc)
+            await response(scope, receive, send)
 
 
 class TrustedHostEnvelopeMiddleware:
@@ -105,6 +106,10 @@ class TrustedHostEnvelopeMiddleware:
         """The host check calls this no-op only when the request may proceed."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and get_route_path(scope) in {"/health", "/ready"}:
+            await self.app(scope, receive, send)
+            return
+
         rejected = False
 
         async def intercept_rejection(message: Message) -> None:

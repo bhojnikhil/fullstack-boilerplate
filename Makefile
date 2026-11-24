@@ -67,12 +67,19 @@ fresh: ## Full reset: stop, delete the database volume, rebuild, start
 	$(COMPOSE) up -d --build --wait
 	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
 
-smoke: ## Build + start all services as packaged; require healthy, non-root, no mounts
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait --wait-timeout 180 postgres api web
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml run --rm --no-deps api alembic upgrade head
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml exec -T api python healthcheck.py http://127.0.0.1:8000/ready
-	COMPOSE_FILE=docker-compose.yml:docker-compose.smoke.yml ./scripts/check-containers.sh api web
-	@printf "$(GREEN)✓ postgres, api and web are healthy, non-root, unmounted$(NC) (stop with: make down)\n"
+smoke: export COMPOSE_FILE ?= docker-compose.yml:docker-compose.smoke.yml
+smoke: ## Check the packaged containers and production API configuration
+	@set -eu; \
+	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
+	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres api web; \
+	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; then \
+		echo "API unexpectedly ready before migrations" >&2; exit 1; \
+	fi; \
+	$(COMPOSE) run --rm --no-deps api alembic upgrade head; \
+	$(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; \
+	./scripts/check-production-api.sh; \
+	./scripts/check-containers.sh api web
+	@printf "$(GREEN)✓ postgres, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 

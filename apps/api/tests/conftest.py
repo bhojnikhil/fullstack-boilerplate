@@ -37,7 +37,7 @@ def migration_config(connection: Connection) -> Config:
 
 
 @pytest.fixture
-async def test_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
+async def empty_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
     admin = create_async_engine(
         database_url, poolclass=NullPool, connect_args={"connect_timeout": 3}
     )
@@ -51,10 +51,6 @@ async def test_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
             connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 3},
         )
         try:
-            async with engine.begin() as connection:
-                await connection.run_sync(
-                    lambda conn: command.upgrade(migration_config(conn), "head")
-                )
             yield engine
         finally:
             await engine.dispose()
@@ -62,6 +58,14 @@ async def test_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
                 await connection.execute(DropSchema(schema, cascade=True))
     finally:
         await admin.dispose()
+
+
+@pytest.fixture
+async def test_db_engine(empty_db_engine: AsyncEngine) -> AsyncEngine:
+    # Concurrent index operations require Alembic to manage its own transactions.
+    async with empty_db_engine.connect() as connection:
+        await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
+    return empty_db_engine
 
 
 @pytest.fixture

@@ -72,12 +72,12 @@ async def update_current_user(
     return mutation.save(UserResponse.model_validate(user))
 
 
-@router.get("/google/login")
+@router.get("/google/login", responses={503: {"model": ErrorEnvelope}})
 async def google_login(oauth_service: OAuth) -> dict[str, str]:
     return oauth_service.get_google_authorization_url()
 
 
-@router.get("/google/callback")
+@router.get("/google/callback", responses={503: {"model": ErrorEnvelope}})
 async def google_callback(
     request: Request, code: str, oauth_service: OAuth, auth_service: Auth, config: Config
 ) -> RedirectResponse:

@@ -58,6 +58,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-acc
 
 # ---------------------------------------------------------------------------
 FROM base AS runtime
+ENV ENV=production
 # pip ships with the base image but is never needed at runtime.
 RUN python -m pip uninstall --yes --quiet pip \
     && groupadd --system --gid 10001 app \

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from uuid import uuid4
 
 from sqlalchemy import select, update
@@ -77,6 +78,42 @@ async def test_rejects_key_reuse_for_another_payload_or_target(client, auth_head
         422,
         "invalid_idempotency_key",
     )
+
+
+async def test_idempotency_ignores_content_type_parameters_but_hashes_exact_body(
+    client, auth_headers
+):
+    headers = keyed(auth_headers)
+    url = "/v1/items"
+    body = b'{"title":"one"}'
+    created = await client.post(
+        url, headers={**headers, "Content-Type": "application/json"}, content=body
+    )
+    assert created.status_code == 201
+    headers["Content-Type"] = "Application/JSON; charset=utf-8"
+    replay = await client.post(url, headers=headers, content=body)
+    assert replay.status_code == 201
+    assert replay.json() == created.json()
+    changed = await client.post(url, headers=headers, content=b'{"title": "one"}')
+    assert_error(changed, 422, "idempotency_mismatch")
+
+
+async def test_idempotency_replays_legacy_hash_with_original_content_type(
+    client, auth_headers, session_factory, test_user
+):
+    url = "/v1/items"
+    headers = {**keyed(auth_headers), "Content-Type": "application/json; charset=utf-8"}
+    body = b'{"title":"one"}'
+    created = await client.post(url, headers=headers, content=body)
+    assert created.status_code == 201
+    original_parts = (b"POST", url.encode(), b"", headers["Content-Type"].encode(), body)
+    legacy_digest = sha256(b"".join(len(part).to_bytes(8, "big") + part for part in original_parts))
+    async with session_factory.begin() as session:
+        record = await session.get(IdempotencyRecord, (test_user.id, headers["Idempotency-Key"]))
+        record.request_hash = legacy_digest.hexdigest()
+    replay = await client.post(url, headers=headers, content=body)
+    assert replay.status_code == 201
+    assert replay.json() == created.json()
 
 
 async def test_same_key_is_independent_between_users(client, auth_headers, config, session_factory):

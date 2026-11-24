@@ -54,7 +54,12 @@ addopts = [
 
 [tool.coverage.run]
 branch = true
+concurrency = ["greenlet", "thread"]
 omit = ["*/tests/*", "*/__pycache__/*", "*/site-packages/*"]
+
+[tool.coverage.report]
+fail_under = 96.46
+precision = 2
 
 # Ruff Configuration (Linting & Formatting)
 [tool.ruff]

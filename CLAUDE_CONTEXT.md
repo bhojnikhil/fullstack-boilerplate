@@ -56,11 +56,15 @@ scripts/                 template customization and container checks
   is scoped to the user, with a 24-hour replay window. The response record is written in
   the same Postgres transaction as the mutation. See [ADR 0004](docs/adr/0004-async-postgres.md).
 - Request logs contain the request ID, route template, method, status, duration and
-  user ID when available. Keep request bodies, raw URLs and query strings, credentials, and
-  provider responses out of logs.
-- The container probes `/health` for liveness. `/ready` checks the app's database
-  connection and applied Alembic heads. Run Alembic using the direct connection when
-  the application uses a pooler.
+  user ID when available. Exceptions include stack frames and types. Keep messages,
+  locals, request bodies, raw URLs and query strings, credentials and provider responses
+  out of exception logs. The API and Alembic use JSON logs outside development.
+- The API defaults to `ENV=production` and requires an explicit signing key and database URL
+  in staging and production. Compose development sets `ENV=development`.
+- The container probes `/health` for liveness. Both probes bypass the host allowlist.
+  `/ready` rejects an unreachable, unmigrated or behind database. An unknown revision is
+  accepted with a warning to support rolling deploys. Run Alembic using the direct
+  connection when the application uses a pooler.
 
 ## Development and checks
 
@@ -72,13 +76,14 @@ make dev                          # Compose Postgres + API, Next.js dev server o
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
 make build-web                    # production Next.js build
-make smoke                        # healthy packaged containers, applied migrations, readiness
+make smoke                        # packaged API in production mode, migrations and probes
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres
 `DATABASE_URL`. The fixtures apply Alembic in a fresh schema for each database test,
 including tests with concurrent requests. CI upgrades its Postgres service and runs
-`alembic check` before pytest. The coverage gate is 90% with branch measurement enabled.
+`alembic check` before pytest. Plain pytest, `make test` and CI enforce the 96.46%
+branch-aware gate configured in `apps/api/pyproject.toml`, with greenlet and thread tracing.
 
 Check the current stable registry versions before choosing dependency versions.
 Pin exact versions and update the corresponding lockfile. Keep local env files and

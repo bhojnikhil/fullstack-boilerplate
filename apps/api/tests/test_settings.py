@@ -16,14 +16,17 @@ def test_requires_secret_outside_local_environments(monkeypatch, env, secret):
         Settings(env=env, secret_key=secret, _env_file=None)
 
 
-def test_boot_fails_without_production_secret(database_url, tmp_path):
+@pytest.mark.parametrize("env_name", [None, "production"])
+def test_boot_fails_without_production_secret(database_url, tmp_path, env_name):
     env = {
         **os.environ,
-        "ENV": "production",
         "DATABASE_URL": database_url.render_as_string(hide_password=False),
         "PYTHONPATH": os.getcwd(),
     }
     env.pop("SECRET_KEY", None)
+    env.pop("ENV", None)
+    if env_name is not None:
+        env["ENV"] = env_name
     process = subprocess.run(
         [sys.executable, "-c", "import app.main"],
         env=env,
@@ -75,4 +78,45 @@ def test_config_from_env(monkeypatch):
 )
 def test_rejects_misconfigured_settings(fields, message):
     with pytest.raises(ValidationError, match=message):
-        Settings(_env_file=None, **fields)
+        Settings(_env_file=None, **{"env": "test", **fields})
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "*",
+        "https://*.example.com",
+        "example.com",
+        "ftp://example.com",
+        "https://",
+        "https://example.com/",
+        "https://example.com?",
+        "https://example.com#fragment",
+        "https://user:password@example.com",
+        "https://example.com:invalid",
+        "https://example.com:65536",
+        "https://example.com\\path",
+    ],
+)
+def test_rejects_invalid_cors_origins(origin):
+    with pytest.raises(ValidationError, match="cors_origins"):
+        Settings(env="test", cors_origins=[origin], _env_file=None)
+
+
+def test_accepts_explicit_cors_origins():
+    origins = ["https://web.example.com", "http://localhost:3000", "http://[::1]:3000"]
+    assert Settings(env="test", cors_origins=origins, _env_file=None).cors_origins == origins
+
+
+@pytest.mark.parametrize("env", ["staging", "production"])
+def test_rejects_catch_all_trusted_host(env):
+    fields = {
+        "env": env,
+        "secret_key": "staging-fixture-" * 3,
+        "database_url": "postgresql://app:app@pooler.example/db",
+    }
+    with pytest.raises(ValidationError, match="TRUSTED_HOSTS"):
+        Settings(trusted_hosts=["api.example.com", "*"], _env_file=None, **fields)
+    assert Settings(trusted_hosts=["*.example.com"], _env_file=None, **fields).trusted_hosts == [
+        "*.example.com"
+    ]

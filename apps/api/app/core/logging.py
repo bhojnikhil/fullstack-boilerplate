@@ -1,10 +1,30 @@
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 import structlog
-from structlog.typing import Processor
+from structlog.processors import ExceptionRenderer
+from structlog.stdlib import ProcessorFormatter
+from structlog.tracebacks import ExceptionDictTransformer
+from structlog.typing import ExcInfo, Processor
 
 from app.core.config import Environment
+
+exception_dicts = ExceptionDictTransformer(show_locals=False)
+
+
+def redact_tracebacks(stacks: list[dict[str, Any]]) -> None:
+    for stack in stacks:
+        # Messages, notes and syntax error snippets can contain request data or SQL.
+        del stack["exc_value"], stack["exc_notes"], stack["syntax_error"]
+        for nested in stack["exceptions"]:
+            redact_tracebacks(nested)
+
+
+def safe_tracebacks(exc_info: ExcInfo) -> list[dict[str, Any]]:
+    stacks = exception_dicts(exc_info)
+    redact_tracebacks(stacks)
+    return stacks
 
 
 def configure_logging(env: Environment) -> None:
@@ -13,12 +33,36 @@ def configure_logging(env: Environment) -> None:
         if env == "development"
         else structlog.processors.JSONRenderer()
     )
-    processors: Sequence[Processor] = [
+    shared_processors: Sequence[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
+        structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        renderer,
     ]
-    structlog.configure(processors=processors)
-    # Uvicorn access records include raw paths/query strings, including OAuth callback codes.
+    structlog.configure(
+        processors=[*shared_processors, ProcessorFormatter.wrap_for_formatter],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processors=[
+                ProcessorFormatter.remove_processors_meta,
+                ExceptionRenderer(safe_tracebacks),
+                renderer,
+            ],
+        )
+    )
+    logging.basicConfig(handlers=[handler], level=logging.INFO, force=True)
+
+    # Replace Uvicorn's built-in text handlers with the shared formatter.
+    for name in ("uvicorn", "uvicorn.error"):
+        logger = logging.getLogger(name)
+        logger.handlers.clear()
+        logger.propagate = True
+    # Access and HTTP client records can include raw URLs, including OAuth codes.
     logging.getLogger("uvicorn.access").disabled = True
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)

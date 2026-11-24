@@ -1,6 +1,7 @@
 from asyncio import timeout
 from pathlib import Path
 
+import structlog
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -12,12 +13,14 @@ from app.core.db import get_session_factory
 from app.core.errors import DomainError, ErrorCode, ErrorEnvelope
 
 router = APIRouter(tags=["health"])
+log = structlog.get_logger()
 
 
-def migration_heads() -> set[str]:
+def shipped_revisions() -> tuple[set[str], set[str]]:
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
-    return set(ScriptDirectory.from_config(config).get_heads())
+    scripts = ScriptDirectory.from_config(config)
+    return set(scripts.get_heads()), {revision.revision for revision in scripts.walk_revisions()}
 
 
 def applied_heads(connection: Connection) -> set[str]:
@@ -39,6 +42,13 @@ async def readiness_check(request: Request) -> dict[str, str]:
             heads = await connection.run_sync(applied_heads)
     except (SQLAlchemyError, TimeoutError) as err:
         raise DomainError(ErrorCode.NOT_READY) from err
-    if heads != request.app.state.migration_heads:
+    shipped_heads, known_revisions = request.app.state.shipped_revisions
+    if not heads or heads & (known_revisions - shipped_heads):
+        raise DomainError(ErrorCode.NOT_READY)
+    unknown = heads - known_revisions
+    if unknown:
+        # Newer deploys can advance the schema while this image is still serving traffic.
+        log.warning("database_revision_unknown", unknown_revision_count=len(unknown))
+    elif heads != shipped_heads:
         raise DomainError(ErrorCode.NOT_READY)
     return {"status": "ok"}

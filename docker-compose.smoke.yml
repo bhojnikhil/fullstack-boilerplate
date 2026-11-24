@@ -4,10 +4,13 @@
 # target with its own CMD and no mounts, so the HEALTHCHECKs exercise the files
 # that were actually built into the images.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait postgres api web
-#   (or: make smoke)
+# `make smoke` supplies a temporary signing key and runs the checks.
 services:
   api:
     build:
       target: runtime
+    environment:
+      ENV: production
+      SECRET_KEY: ${SMOKE_SECRET_KEY:-}
+      TRUSTED_HOSTS: '["api.example.com"]'
     volumes: !reset []

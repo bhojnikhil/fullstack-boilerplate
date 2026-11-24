@@ -17,6 +17,7 @@ from app.core.errors import (
     ErrorEnvelope,
     domain_error_handler,
     http_error_handler,
+    internal_error_handler,
     validation_error_handler,
 )
 from app.core.idempotency import ReplayResponseError, replay_handler
@@ -63,6 +64,7 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
         version="1.0.0",
         lifespan=lifespan,
         exception_handlers={
+            Exception: internal_error_handler,
             ReplayResponseError: replay_handler,
             DomainError: domain_error_handler,
             HTTPException: http_error_handler,
@@ -73,7 +75,7 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
     )
     app.state.settings = config
     app.state.session_factory = sessions
-    app.state.migration_heads = health.migration_heads()
+    app.state.shipped_revisions = health.shipped_revisions()
 
     configure_logging(config.env)
     app.add_middleware(BodyLimitMiddleware, limit=config.max_request_body_bytes)

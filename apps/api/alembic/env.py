@@ -1,7 +1,5 @@
 """Alembic migration environment."""
 
-from logging.config import fileConfig
-
 from sqlalchemy import create_engine, pool
 
 from alembic import context
@@ -9,6 +7,7 @@ from alembic import context
 # Import your models here to auto-generate migrations
 from app.core.config import DatabaseSettings
 from app.core.idempotency import IdempotencyRecord  # noqa: F401
+from app.core.logging import configure_logging
 from app.core.models import Base
 from app.modules.auth.models import User  # noqa: F401
 from app.modules.items.models import Item  # noqa: F401
@@ -16,21 +15,20 @@ from app.modules.items.models import Item  # noqa: F401
 # this is the Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging
-if config.config_file_name is not None and "connection" not in config.attributes:
-    fileConfig(config.config_file_name)
-
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = DatabaseSettings().database(migration=True)
+    settings = DatabaseSettings()
+    configure_logging(settings.env)
+    url = settings.database(migration=True)
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        transaction_per_migration=True,
     )
 
     with context.begin_transaction():
@@ -44,7 +42,11 @@ def run_migrations_online() -> None:
         migrate(connection)
         return
 
-    engine = create_engine(DatabaseSettings().database(migration=True), poolclass=pool.NullPool)
+    settings = DatabaseSettings()
+    configure_logging(settings.env)
+    engine = create_engine(
+        settings.database(migration=True), poolclass=pool.NullPool, hide_parameters=True
+    )
     try:
         with engine.connect() as connection:
             migrate(connection)
@@ -54,7 +56,10 @@ def run_migrations_online() -> None:
 
 def migrate(connection) -> None:
     context.configure(
-        connection=connection, target_metadata=target_metadata, compare_server_default=True
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_server_default=True,
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
