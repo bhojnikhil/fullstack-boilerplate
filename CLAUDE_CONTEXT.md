@@ -29,74 +29,51 @@ This ensures clean separation of concerns and testability.
 
 ```
 fullstack-boilerplate/
-├── api/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI app initialization
-│   │   ├── auth/                # Authentication utilities
-│   │   │   ├── security.py      # Password hashing, JWT tokens
-│   │   │   └── dependencies.py  # FastAPI dependencies (get_current_user, get_db)
-│   │   ├── core/
-│   │   │   ├── config.py        # Pydantic settings (env vars / api/.env)
-│   │   │   └── db.py            # SQLAlchemy engine, SessionLocal, get_db
-│   │   ├── models/              # SQLAlchemy ORM models
-│   │   │   ├── base.py          # Base, UUIDMixin, TimestampMixin
-│   │   │   ├── user.py          # User model + OAuthAccount
-│   │   │   └── item.py          # Item example (customize for your domain entity)
-│   │   ├── schemas/             # Pydantic request/response models
-│   │   │   ├── user.py
-│   │   │   └── item.py
-│   │   ├── repositories/        # Database access layer
-│   │   │   ├── user.py          # UserRepository
-│   │   │   └── item.py          # ItemRepository
-│   │   ├── services/            # Business logic layer
-│   │   │   ├── auth.py          # AuthService (register, login, profile update; no password reset yet)
-│   │   │   ├── oauth.py         # OAuthService (Google OAuth 2.0)
-│   │   │   └── item.py          # ItemService (CRUD example)
-│   │   └── routers/             # HTTP endpoints
-│   │       ├── health.py        # Health check
-│   │       ├── auth.py          # /auth/* routes
-│   │       └── items.py         # /items/* routes
-│   ├── alembic/                 # Database migrations
-│   │   ├── env.py               # Migration environment
-│   │   ├── script.py.mako       # Migration template
-│   │   └── versions/            # Generated migrations (auto-generated)
-│   ├── tests/
-│   │   ├── conftest.py          # Pytest fixtures (test_db, client, auth_headers)
-│   ├── healthcheck.py           # Container HEALTHCHECK probe (stdlib only)
-│   │   ├── test_repositories/
-│   │   ├── test_services/
-│   │   └── test_routers/
-│   ├── .env.example             # Environment template
-│   ├── pyproject.toml           # Python dependencies + Poetry config
-│   └── Dockerfile
-├── client/
-│   ├── app/                     # Next.js app directory
-│   │   ├── layout.tsx           # Root layout
-│   │   ├── page.tsx             # Home page
-│   │   ├── globals.css          # Global styles
-│   │   ├── auth/
-│   │   │   ├── login/page.tsx
-│   │   │   └── register/page.tsx
-│   │   └── items/page.tsx       # Items CRUD page
-│   ├── lib/
-│   │   ├── api.ts               # Axios API client with interceptors
-│   │   └── auth-store.ts        # Zustand auth store
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── next.config.js
-│   ├── .env.example
-│   └── Dockerfile
+├── apps/
+│   ├── api/                         # FastAPI service (uv)
+│   │   ├── app/
+│   │   │   ├── main.py              # FastAPI app initialization
+│   │   │   ├── auth/                # security.py (hashing, JWT), dependencies.py
+│   │   │   ├── core/                # config.py (settings), db.py (engine, SessionLocal, get_db)
+│   │   │   ├── models/              # base.py, user.py (User, OAuthAccount), item.py, enums.py
+│   │   │   ├── schemas/             # Pydantic request/response models
+│   │   │   ├── repositories/        # UserRepository, OAuthAccountRepository, ItemRepository
+│   │   │   ├── services/            # AuthService (no password reset yet), OAuthService, ItemService
+│   │   │   └── routers/             # health.py, auth.py (/auth/*), items.py (/items/*)
+│   │   ├── alembic/                 # Migration environment (versions/ is empty)
+│   │   ├── tests/                   # conftest.py + test_repositories/, test_services/, test_routers/
+│   │   ├── healthcheck.py           # Container HEALTHCHECK probe (stdlib only)
+│   │   ├── pyproject.toml           # PEP 621 metadata, exact pins, tool config
+│   │   ├── uv.lock                  # Locked dependency resolution
+│   │   ├── .python-version          # 3.13
+│   │   ├── .env.example
+│   │   └── Dockerfile               # targets: runtime (default, slim, non-root), dev
+│   └── web/                         # Next.js app (workspace package "web")
+│       ├── app/                     # App Router: /, /auth/login, /auth/register, /items
+│       ├── lib/                     # api.ts (axios), auth-store.ts (zustand)
+│       ├── css.d.ts                 # Type declaration for global CSS imports
+│       ├── eslint.config.mjs        # Re-exports @repo/config/eslint/next
+│       ├── next.config.mjs          # output: "standalone"
+│       ├── tsconfig.json            # Extends @repo/config/tsconfig/nextjs.json
+│       ├── .env.example
+│       ├── Dockerfile               # Build context: repo root
+│       └── Dockerfile.dockerignore  # Allowlist for the root build context
+├── packages/
+│   └── config/                      # @repo/config: tsconfig, ESLint, Prettier
+├── docs/adr/                        # Architecture decision records
 ├── scripts/
-│   ├── customize.sh             # Placeholder replacement + local .env creation
-│   └── test-customize.sh        # Regression test for customize.sh
+│   ├── customize.sh                 # Placeholder replacement + local .env creation
+│   ├── test-customize.sh            # Regression test for customize.sh
+│   └── test-dockerignore.sh         # Regression test for the build-context ignore files
 ├── .github/workflows/
-│   ├── test.yml                 # Pytest + linting + type checking
-│   └── deploy.yml               # Manual placeholder; nothing is deployed
-├── docker-compose.yml           # Local development stack (postgres, api, client)
-├── Makefile                     # Development commands (`make help`)
-├── README.md                    # User-facing documentation
-├── CLAUDE_CONTEXT.md            # This file
+│   ├── ci.yml                       # api, web, scripts, docker (smoke) jobs
+│   └── deploy.yml                   # Manual placeholder; nothing is deployed
+├── docker-compose.yml               # postgres, api (dev target), web
+├── docker-compose.smoke.yml         # Overlay: run images as packaged
+├── package.json / pnpm-workspace.yaml / pnpm-lock.yaml / turbo.json / .nvmrc
+├── Makefile                         # Single entry point (`make help`)
+├── README.md                        # User-facing documentation
+├── CLAUDE_CONTEXT.md                # This file
 └── LICENSE
 ```
 
@@ -104,10 +81,11 @@ fullstack-boilerplate/
 
 ### Placeholder Replacement System
 
-A few files contain `{{PROJECT_NAME}}` / `{{APP_NAME}}` placeholders (package names in
-`api/pyproject.toml` and `client/package.json`, `api/app/__init__.py`, this file).
-`scripts/customize.sh` replaces them and creates the untracked `api/.env` (with a
-generated `SECRET_KEY`) and `client/.env.local`:
+A few files contain an app-display-name placeholder (`apps/api/app/__init__.py`, the
+title of this file). Package and project names are fixed (`api`, `web`, `@repo/config`)
+because they are recorded in the lockfiles. `scripts/customize.sh` replaces the
+placeholders and creates the untracked `apps/api/.env` (with a generated `SECRET_KEY`)
+and `apps/web/.env.local`:
 
 ```bash
 ./scripts/customize.sh myapp "My App" myapp.com
@@ -191,10 +169,9 @@ def register(
 
 ### Prerequisites
 
-- Python 3.13+
-- Node.js 20+
-- PostgreSQL 16+ (or use Docker)
-- Docker & Docker Compose (optional, for containerized setup)
+- Docker with Compose v2 (for the full stack and Postgres)
+- uv 0.13.9 (installs Python 3.13 when needed)
+- Node.js 26 and pnpm 12.23.0 (`npm install -g pnpm@12.23.0`; Node 25+ has no Corepack)
 
 ### Local Development Setup
 
@@ -205,25 +182,20 @@ def register(
    ./scripts/customize.sh my-project "My Project"
    ```
 
-2. **Backend setup** (needs a reachable Postgres, e.g. `docker compose up -d postgres`):
+2. **Install dependencies:** `make setup` (`uv sync --locked` + `pnpm install --frozen-lockfile`)
+
+3. **Backend** (needs a reachable Postgres, e.g. `docker compose up -d postgres`):
    ```bash
-   cd api
-   poetry install
+   cd apps/api
    cp .env.example .env   # skip if customize.sh created it
-   # Edit .env with your settings
    # Tables are created by create_all() at startup; there are no migrations yet.
-   poetry run uvicorn app.main:app --reload
+   uv run uvicorn app.main:app --reload
    ```
 
-3. **Frontend setup:**
-   ```bash
-   cd client
-   npm install
-   cp .env.example .env.local
-   npm run dev
-   ```
+4. **Frontend:** `pnpm turbo run dev --filter web` (or `make dev`, which also starts
+   postgres + api in Docker)
 
-4. **Visit:**
+5. **Visit:**
    - Frontend: http://localhost:3000
    - API: http://localhost:8000
    - API Docs: http://localhost:8000/docs
@@ -231,7 +203,7 @@ def register(
 ### Docker Setup
 
 ```bash
-make up      # docker compose up -d (postgres, api, client)
+make up      # docker compose up -d (postgres, api, web)
 make ps      # status, including api health
 make logs    # follow logs
 make down    # stop
@@ -241,7 +213,7 @@ make down    # stop
 
 ### Adding a New Domain Entity
 
-1. **Create model** (`api/app/models/your_entity.py`):
+1. **Create model** (`apps/api/app/models/your_entity.py`):
    ```python
    from app.models.base import Base, UUIDMixin, TimestampMixin
 
@@ -251,7 +223,7 @@ make down    # stop
        user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
    ```
 
-2. **Create repository** (`api/app/repositories/your_entity.py`):
+2. **Create repository** (`apps/api/app/repositories/your_entity.py`):
    ```python
    class YourEntityRepository:
        def __init__(self, db: Session):
@@ -265,7 +237,7 @@ make down    # stop
            return entity
    ```
 
-3. **Create service** (`api/app/services/your_entity.py`):
+3. **Create service** (`apps/api/app/services/your_entity.py`):
    ```python
    class YourEntityService:
        def __init__(self, repo: YourEntityRepository):
@@ -275,7 +247,7 @@ make down    # stop
            return self.repo.create(name, user_id)
    ```
 
-4. **Create router** (`api/app/routers/your_entities.py`):
+4. **Create router** (`apps/api/app/routers/your_entities.py`):
    ```python
    @router.post("/your-entities")
    def create_entity(
@@ -288,7 +260,7 @@ make down    # stop
        return YourEntityResponse.model_validate(entity)
    ```
 
-5. **Register router** in `api/app/main.py`:
+5. **Register router** in `apps/api/app/main.py`:
    ```python
    from app.routers import your_entities
    app.include_router(your_entities.router, tags=["your-entities"])
@@ -296,8 +268,8 @@ make down    # stop
 
 6. **Create migration:**
    ```bash
-   poetry run alembic revision --autogenerate -m "Add your_entities table"
-   poetry run alembic upgrade head
+   make migration name=add_your_entities_table
+   make migrate
    ```
 
 ### Changing the Example Entity (Item)
@@ -313,16 +285,11 @@ Replace all references:
 ### Backend Tests
 
 ```bash
-cd api
+docker compose up -d postgres   # the app's startup hook needs Postgres
+make test                       # all API tests (coverage report included)
 
-# Run all tests
-poetry run pytest tests/ -v
-
-# Run specific test file
-poetry run pytest tests/test_routers/test_items.py -v
-
-# With coverage
-poetry run pytest tests/ --cov=app --cov-report=html
+# Specific test file
+cd apps/api && uv run pytest tests/test_routers/test_items.py
 ```
 
 ### Test Structure
@@ -376,7 +343,7 @@ and there is no production compose file.
 
 - [ ] Fix the known issues listed in README.md
 - [ ] Set `SECRET_KEY` to a random value (the code falls back to a public default)
-- [ ] Change the hardcoded CORS origins in `api/app/main.py`
+- [ ] Change the hardcoded CORS origins in `apps/api/app/main.py`
 - [ ] Set up HTTPS/SSL
 - [ ] Configure PostgreSQL backups
 - [ ] Set up monitoring & logging
@@ -389,46 +356,40 @@ and there is no production compose file.
 ### Generate Database Migration
 
 ```bash
-cd api
-poetry run alembic revision --autogenerate -m "Description of changes"
+make migration name=description_of_changes
 ```
 
 ### Run Linting and Type Checking
 
 ```bash
-cd api
-poetry run ruff check .
-poetry run mypy app
-
-cd ../client
-npm run lint
-npm run type-check
+make lint        # ruff check + ESLint
+make typecheck   # mypy + tsc
 ```
 
 ### Format Code
 
 ```bash
-cd api
-poetry run ruff format .
-
-cd ../client
-npm run format
+make fmt         # ruff format + Prettier
+make fmt-check   # what CI enforces
 ```
 
 ### Add Python Dependency
 
+Pin exact versions (check the current release first):
+
 ```bash
-cd api
-poetry add package_name
-poetry lock
+cd apps/api
+uv add 'package_name==X.Y.Z'           # runtime dependency
+uv add --dev 'package_name==X.Y.Z'     # dev dependency group
 ```
 
 ### Add JavaScript Dependency
 
+Pin exact versions (check the current release first):
+
 ```bash
-cd client
-npm install package_name
-npm install --save-dev dev-package-name
+pnpm --filter web add --save-exact package_name
+pnpm --filter web add --save-exact --save-dev dev-package-name
 ```
 
 ## API Endpoints
@@ -501,7 +462,7 @@ git push origin feature/your-feature
 - Verify SECRET_KEY matches between backend and token generation
 
 ### CORS Errors
-- CORS origins are hardcoded in `api/app/main.py`
+- CORS origins are hardcoded in `apps/api/app/main.py`
 - Frontend URL must be in allowed origins
 - In development, should be `["http://localhost:3000"]`
 
@@ -533,7 +494,7 @@ git push origin feature/your-feature
 
 - Passwords hashed with bcrypt
 - Stateless 7-day JWT access tokens (no refresh tokens, revocation or rate limiting yet)
-- CORS origins hardcoded to localhost in `api/app/main.py`
+- CORS origins hardcoded to localhost in `apps/api/app/main.py`
 - SQL injection prevented by SQLAlchemy ORM
 - XSS mitigated by React's JSX escaping (but tokens in localStorage are readable by any XSS)
 - No cookies are used, so there is no CSRF protection to speak of; see README.md known issues

@@ -1,12 +1,13 @@
 # Full-Stack Boilerplate
 
-A starter monorepo with a **FastAPI** backend (`api/`) and a **Next.js 15** frontend
-(`client/`), run locally with Docker Compose and tested in GitHub Actions.
+A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 15** frontend
+(`apps/web`). It uses uv for Python and pnpm workspaces + Turborepo for JavaScript, runs
+locally with Docker Compose, and is tested in GitHub Actions.
 
 > [!WARNING]
-> **Not production-ready yet.** This is the v1 baseline. A v2 upgrade (auth redesign,
-> multi-tenancy, mobile app, real deploys) is in progress as a series of PRs. Known issues
-> in the current code that you should not ship:
+> **Not production-ready yet.** A v2 upgrade (auth redesign, multi-tenancy, mobile app,
+> real deploys) is in progress as a series of PRs. Known issues in the current code that
+> you should not ship:
 >
 > - Google OAuth: the `state` parameter is never verified (login CSRF), the JWT is put in
 >   the redirect URL, and the frontend has no `/auth/callback` page, so Google sign-in
@@ -22,24 +23,39 @@ A starter monorepo with a **FastAPI** backend (`api/`) and a **Next.js 15** fron
 > - Each repository method commits on its own (no request-level transactions), and
 >   services raise `HTTPException` directly.
 
+## Repository layout
+
+```
+apps/
+  api/            FastAPI service (Python, uv)
+  web/            Next.js app (pnpm workspace package "web")
+packages/
+  config/         shared TypeScript, ESLint and Prettier config (@repo/config)
+docs/adr/         architecture decision records
+scripts/          customize.sh and regression tests for repo tooling
+Makefile          single entry point for both Python and JS tasks (`make help`)
+```
+
 ## What's included
 
-**Backend (`api/`)**
-- Python 3.13, FastAPI, SQLAlchemy 2.0 (sync) with `psycopg2`, PostgreSQL 16.
+**Backend (`apps/api`)**
+- Python 3.13, FastAPI, SQLAlchemy 2.1 (sync) with psycopg 3, PostgreSQL 16.
 - Router → Service → Repository layering (`app/routers`, `app/services`, `app/repositories`).
 - Email/password auth: bcrypt password hashing, HS256 JWT access tokens (python-jose),
-  `GET/PATCH /auth/me`.
+  `GET/PATCH /auth/me`. Requests without a token get `401`.
 - Google OAuth 2.0 server-side redirect flow (`/auth/google/login`, `/auth/google/callback`),
   backend only, with the issues listed above.
 - Example `items` CRUD, scoped to the signed-in user (`GET/POST /items`,
   `GET/PATCH/DELETE /items/{id}`).
 - `GET /health` liveness endpoint (no database check).
-- Alembic is configured (`api/alembic/`), but `versions/` is empty. The schema currently
-  comes from `Base.metadata.create_all()` at startup.
-- Poetry for dependency management (`api/pyproject.toml`, `api/poetry.lock`).
+- Alembic is configured (`apps/api/alembic/`), but `versions/` is empty. The schema
+  currently comes from `Base.metadata.create_all()` at startup.
+- Dependencies managed with uv: exact pins in `pyproject.toml`, locked in `uv.lock`
+  ([ADR 0001](docs/adr/0001-python-tooling-uv.md)).
 
-**Frontend (`client/`)**
-- Next.js 15 (App Router), React 19, TypeScript (`strict: true`).
+**Frontend (`apps/web`)**
+- Next.js 15 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
+  config in `packages/config`.
 - Pages: `/`, `/auth/login`, `/auth/register`, `/items`.
 - axios API client (`lib/api.ts`) that sends the JWT from `localStorage` and redirects to
   login on 401. Zustand auth store (`lib/auth-store.ts`).
@@ -47,19 +63,29 @@ A starter monorepo with a **FastAPI** backend (`api/`) and a **Next.js 15** fron
 - No Google sign-in button and no frontend tests yet.
 
 **Tooling**
-- `docker-compose.yml`: `postgres`, `api` (hot reload, source mounted), `client` (production
-  build via `next start`; rebuild to see changes, or run `npm run dev` in `client/`).
-- The API image has a `HEALTHCHECK` (`api/healthcheck.py`: stdlib-only, requires a 2xx from
-  `/health` itself, does not follow redirects).
-- `api/.dockerignore` and `client/.dockerignore` keep env files, keys and local DBs (at any
-  depth) out of images.
-- `Makefile` wrapping Docker Compose (run `make help`).
-- GitHub Actions (`.github/workflows/test.yml`):
-  - backend: ruff, mypy (not strict mode), pytest with a coverage report (no threshold);
-  - frontend: `next lint`, `tsc --noEmit`, `next build`;
-  - `scripts/test-customize.sh` and `scripts/test-dockerignore.sh`;
-  - Docker images build, and the API container, run as packaged (no source mount, via
-    `docker-compose.smoke.yml`), must report healthy. Locally: `make smoke`.
+- pnpm workspaces + Turborepo for `lint`, `typecheck`, `build`, `dev`
+  ([ADR 0002](docs/adr/0002-js-monorepo-pnpm-turborepo.md)).
+- Formatting: ruff format (Python) and Prettier (`apps/web`, `packages`), both enforced
+  in CI.
+- Docker images ([ADR 0003](docs/adr/0003-container-images.md)):
+  - API: multi-stage; the default `runtime` target is slim (no compilers, uv, pip or
+    tests) and runs as an unprivileged user; a `dev` target is used by Compose.
+  - Web: Next.js standalone server, running as the unprivileged `node` user.
+  - Both have `HEALTHCHECK`s that require a 2xx response and don't follow redirects.
+- `docker-compose.yml`: `postgres`, `api` (`dev` target, hot reload, source mounted),
+  `web` (production build; rebuild to see changes, or use `make dev` for hot reload).
+- `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
+  and local DBs (at any depth) out of images.
+- GitHub Actions (`.github/workflows/ci.yml`), with every third-party action pinned to a
+  commit SHA:
+  - **api**: `uv sync --locked`, ruff check, ruff format --check, mypy (not strict mode),
+    pytest with a coverage report (no threshold);
+  - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
+    `next build` via Turborepo;
+  - **scripts**: `scripts/test-customize.sh`;
+  - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
+    api and web as packaged (`docker-compose.smoke.yml`: no source mounts) and require
+    all to be healthy and non-root. Locally: `make smoke`.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
 
@@ -71,8 +97,8 @@ Prerequisites: Docker with Compose v2 (`docker compose`), Make, Git, OpenSSL.
 git clone https://github.com/bhojnikhil/fullstack-boilerplate myapp
 cd myapp
 
-# Fill in the template placeholders (project name, display name, domain) and
-# create api/.env (with a generated SECRET_KEY) and client/.env.local.
+# Fill in the remaining template placeholders (currently the app display name)
+# and create apps/api/.env (with a generated SECRET_KEY) and apps/web/.env.local.
 ./scripts/customize.sh myapp "My App" myapp.com
 
 make up
@@ -80,40 +106,46 @@ make up
 
 Then open:
 
-- Frontend: http://localhost:3000. Create a user at `/auth/register`.
+- Web: http://localhost:3000. Create a user at `/auth/register`.
 - API docs (Swagger UI): http://localhost:8000/docs (ReDoc: `/redoc`)
 
 Docker Compose sets the API's environment in `docker-compose.yml` and does **not** read
-`api/.env`. That file is for running the API directly on your machine (below).
+`apps/api/.env`. That file is for running the API directly on your machine (below).
 
 Ports 5432, 8000 and 3000 must be free.
 
-## Running without Docker
+## Host development
+
+Host-side commands (`make setup`, `make test`, `make lint`, `make dev`, ...) need:
+
+| Tool | Version | Notes |
+| --- | --- | --- |
+| [uv](https://docs.astral.sh/uv/) | 0.13.9 | Enforced by `required-version` in `apps/api/pyproject.toml`. uv installs Python 3.13 if needed. |
+| Node.js | 26 (LTS) | `.nvmrc` |
+| pnpm | 12.23.0 | Pinned in `package.json` `packageManager`. Node 25+ has no Corepack, so install it with `npm install -g pnpm@12.23.0`. |
 
 ```bash
-# Postgres: any local PostgreSQL 16 with a database named `boilerplate`, or:
-docker compose up -d postgres
+make setup                      # uv sync --locked + pnpm install --frozen-lockfile
+docker compose up -d postgres   # or `make up`
+make test                       # API tests against the compose Postgres (localhost:5432)
+make dev                        # postgres + api in Docker, web dev server on the host
+```
 
-# API
-cd api
-poetry install
+To run the API on the host instead of in Docker:
+
+```bash
+cd apps/api
 cp .env.example .env            # skip if customize.sh already created it
-poetry run uvicorn app.main:app --reload
-
-# Frontend (separate terminal)
-cd client
-npm ci
-cp .env.example .env.local      # skip if customize.sh already created it
-npm run dev
+uv run uvicorn app.main:app --reload
 ```
 
 ## Environment variables
 
-**API** (`api/app/core/config.py`, read from the environment or `api/.env`):
+**API** (`apps/api/app/core/config.py`, read from the environment or `apps/api/.env`):
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/boilerplate` | SQLAlchemy URL (psycopg2) |
+| `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/boilerplate` | SQLAlchemy URL; `postgresql://` uses psycopg 3 |
 | `SECRET_KEY` | `dev-secret-key-change-in-production` | JWT signing key. **Always set it.** The default is public. |
 | `JWT_ALGORITHM` | `HS256` | |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` (7 days) | |
@@ -122,10 +154,14 @@ npm run dev
 | `FRONTEND_URL` | `http://localhost:3000` | Target of the OAuth redirect |
 | `DEBUG` | `false` | |
 
-CORS origins are hardcoded in `api/app/main.py` (`http://localhost:3000`,
+CORS origins are hardcoded in `apps/api/app/main.py` (`http://localhost:3000`,
 `http://localhost`, `http://api:8000`).
 
-**Frontend** (`client/.env.local`):
+The Makefile's host-side Python targets (`test`, `migrate`, `migration`) default
+`DATABASE_URL` to the compose Postgres at `localhost:5432`. Override it with
+`make test DATABASE_URL=...`.
+
+**Web** (`apps/web/.env.local`):
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -134,61 +170,31 @@ CORS origins are hardcoded in `api/app/main.py` (`http://localhost:3000`,
 ## Common commands
 
 ```bash
-make help            # list all targets
-make up / make down  # start / stop the stack
-make ps              # service status, including the api health status
-make logs            # follow logs
-make test            # backend tests in the api container
-make test-coverage   # backend tests with an HTML coverage report (api/htmlcov)
-make lint            # ruff (in the api container) + next lint (on the host)
-make typecheck       # mypy (in the api container) + tsc (on the host)
-make format          # ruff format + prettier
-make migrate         # alembic upgrade head (no migrations exist yet)
-make migration NAME='add_column'
-make db-shell        # psql into the dev database
-make fresh           # wipe the DB volume, rebuild, start
-make smoke           # build + start postgres/api as packaged, wait for healthy
-```
-
-Frontend targets run on the host and need `npm ci` in `client/` first.
-
-## Project structure
-
-```
-api/
-├── app/
-│   ├── main.py          # FastAPI app, CORS, routers, create_all() at startup
-│   ├── auth/            # password hashing, JWT, current-user dependencies
-│   ├── core/            # settings (config.py), engine/session (db.py)
-│   ├── models/          # User, OAuthAccount, Item
-│   ├── schemas/         # Pydantic request/response models
-│   ├── repositories/    # data access
-│   ├── services/        # AuthService, OAuthService, ItemService
-│   └── routers/         # /health, /auth, /items
-├── alembic/             # migration environment (no versions yet)
-├── tests/               # pytest (in-memory SQLite)
-├── healthcheck.py       # container HEALTHCHECK probe
-└── Dockerfile
-client/
-├── app/                 # App Router pages: /, /auth/login, /auth/register, /items
-└── lib/                 # api.ts (axios), auth-store.ts (zustand)
-scripts/
-├── customize.sh         # placeholder replacement + local .env creation
-├── test-customize.sh    # regression test for customize.sh
-└── test-dockerignore.sh # regression test for the .dockerignore files
+make help                      # list all targets
+make setup                     # install locked Python + JS dependencies
+make up / make down            # start / stop the Docker stack
+make ps / make logs            # status (including health) / follow logs
+make dev                       # api in Docker + web dev server with hot reload
+make test                      # API tests (pytest)
+make lint                      # ruff check + ESLint
+make typecheck                 # mypy + tsc
+make fmt / make fmt-check      # ruff format + Prettier (write / check)
+make build-web                 # production build of the web app
+make migrate                   # alembic upgrade head (no migrations exist yet)
+make migration name=add_column # autogenerate a migration
+make db-shell                  # psql into the dev database
+make fresh                     # wipe the DB volume, rebuild, start
+make smoke                     # build + start all images as packaged, wait for healthy
 ```
 
 ## Testing
 
 ```bash
-# In Docker (stack running):
+docker compose up -d postgres
 make test
-
-# Or locally:
-cd api && poetry run pytest
 ```
 
-Backend tests use an in-memory SQLite database through a dependency override. The app's
+API tests use an in-memory SQLite database through a dependency override. The app's
 startup hook still runs `create_all()` against `DATABASE_URL`, so a reachable Postgres is
 required (CI provides one). There are no frontend tests yet.
 
@@ -196,16 +202,19 @@ required (CI provides one). There are no frontend tests yet.
 
 Use `items` as the template: model (`app/models`) → schema (`app/schemas`) → repository
 → service → router, then register the router in `app/main.py` and add tests under
-`api/tests/`. `CLAUDE_CONTEXT.md` has a longer walkthrough.
+`apps/api/tests/`. `CLAUDE_CONTEXT.md` has a longer walkthrough.
 
 ## Troubleshooting
 
-**`Illegal instruction` (exit code 132) when building or running the API image on an Apple
-M4 Mac.** We have seen OpenSSL, as loaded by the Python `cryptography` package, crash
-inside Linux containers on an M4 Pro (Docker Desktop, engine 27.5). Setting
-`OPENSSL_armcap=0` in the container environment avoids it (verified). The Dockerfile
-already keeps Poetry from loading `cryptography` during the build. Updating Docker
-Desktop may also fix it; we have not verified that.
+**`Illegal instruction` (exit code 132) when running the API in Docker on an Apple M4
+Mac.** We have seen OpenSSL, as loaded by the Python `cryptography` package, crash inside
+Linux containers on an M4 Pro (Docker Desktop, engine 27.5). Setting `OPENSSL_armcap=0`
+in the container environment avoids it (verified). Updating Docker Desktop may also fix
+it; we have not verified that.
+
+**`Cannot find module .../corepack/.../pnpm.cjs`.** An older Corepack can't launch
+pnpm 12. Install pnpm directly (`npm install -g pnpm@12.23.0`) and make sure it comes
+before any Corepack shim on your `PATH`.
 
 ## License
 
