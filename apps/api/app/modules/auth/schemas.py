@@ -6,17 +6,23 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # User registration/creation schemas
 class UserRegister(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
     password: str = Field(..., min_length=8)
     name: str = Field(..., min_length=1, max_length=255)
 
 
 class UserLogin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
     password: str
 
 
 class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
 
 

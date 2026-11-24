@@ -8,12 +8,7 @@ from datetime import UTC, datetime, timedelta
 import bcrypt
 from jose import jwt
 
-from app.core.config import settings
-
-# JWT settings from configuration
-SECRET_KEY = settings.secret_key
-ALGORITHM = settings.jwt_algorithm
-ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
+from app.core.config import Settings
 
 
 def hash_password(password: str) -> str:
@@ -37,7 +32,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    data: dict[str, str], config: Settings, expires_delta: timedelta | None = None
+) -> str:
     """
     Create a JWT access token.
 
@@ -48,17 +45,17 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     Returns:
         Encoded JWT token as string
     """
-    to_encode = data.copy()
+    to_encode: dict[str, str | datetime] = dict(data)
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(UTC) + timedelta(minutes=config.access_token_expire_minutes)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt: str = jwt.encode(to_encode, config.signing_key, algorithm=config.jwt_algorithm)
     return encoded_jwt
 
 
-def decode_access_token(token: str) -> dict:
+def decode_access_token(token: str, config: Settings) -> dict[str, object]:
     """
     Decode and verify a JWT access token.
 
@@ -71,5 +68,7 @@ def decode_access_token(token: str) -> dict:
     Raises:
         JWTError: If token is invalid or expired
     """
-    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    payload: dict[str, object] = jwt.decode(
+        token, config.signing_key, algorithms=[config.jwt_algorithm]
+    )
     return payload

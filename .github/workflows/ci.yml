@@ -34,7 +34,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: test_db
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d test_db"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -69,8 +69,8 @@ jobs:
           uv run --locked alembic upgrade head
           uv run --locked alembic check
 
-      - name: Tests (pytest)
-        run: uv run --locked pytest
+      - name: Tests (pytest, 90% coverage gate)
+        run: uv run --locked pytest --cov-fail-under=90 --cov-precision=2
 
   web:
     name: web (prettier, eslint, tsc, build)
@@ -146,6 +146,15 @@ jobs:
       # --wait fails if any service does not become healthy.
       - name: Start postgres, api, web and wait for healthy
         run: docker compose up -d --wait --wait-timeout 180 postgres api web
+
+      - name: Verify readiness requires migrations
+        run: |
+          if docker compose exec -T api python healthcheck.py http://127.0.0.1:8000/ready; then
+            echo "API unexpectedly ready before migrations"
+            exit 1
+          fi
+          docker compose run --rm --no-deps api alembic upgrade head
+          docker compose exec -T api python healthcheck.py http://127.0.0.1:8000/ready
 
       # Checks each container's effective UID (docker exec ... id -u) and
       # mounts, failing if any service fails any check.

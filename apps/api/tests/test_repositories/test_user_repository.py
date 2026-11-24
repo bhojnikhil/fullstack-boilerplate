@@ -1,22 +1,22 @@
 """Tests for UserRepository."""
 
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.security import hash_password
-from app.models.user import User
-from app.repositories.user import UserRepository
+from app.core.security import hash_password
+from app.modules.auth.models import User
+from app.modules.auth.repository import UserRepository
 
 
 @pytest.fixture
-def user_repo(test_db: Session) -> UserRepository:
+def user_repo(test_db: AsyncSession) -> UserRepository:
     """Create user repository."""
     return UserRepository(test_db)
 
 
-def test_create_user(user_repo: UserRepository):
+async def test_create_user(user_repo: UserRepository):
     """Test creating a user."""
-    user = user_repo.create(
+    user = await user_repo.create(
         email="newuser@example.com",
         name="New User",
         hashed_password=hash_password("password123"),
@@ -27,33 +27,35 @@ def test_create_user(user_repo: UserRepository):
     assert user.is_active is True
 
 
-def test_get_user_by_email(user_repo: UserRepository, test_user: User):
+async def test_get_user_by_email(user_repo: UserRepository, test_user: User):
     """Test getting user by email."""
-    user = user_repo.get_by_email(test_user.email)
+    user = await user_repo.get_by_email(test_user.email)
 
     assert user is not None
     assert user.email == test_user.email
     assert user.name == test_user.name
 
 
-def test_get_user_by_id(user_repo: UserRepository, test_user: User):
+async def test_get_user_by_id(user_repo: UserRepository, test_user: User):
     """Test getting user by ID."""
-    user = user_repo.get_by_id(test_user.id)
+    user = await user_repo.get_by_id(test_user.id)
 
     assert user is not None
     assert user.id == test_user.id
     assert user.email == test_user.email
 
 
-def test_get_nonexistent_user(user_repo: UserRepository):
+async def test_get_nonexistent_user(user_repo: UserRepository):
     """Test getting nonexistent user."""
-    user = user_repo.get_by_email("nonexistent@example.com")
+    user = await user_repo.get_by_email("nonexistent@example.com")
     assert user is None
 
 
-def test_update_user(user_repo: UserRepository, test_user: User):
+async def test_update_user(user_repo: UserRepository, test_user: User):
     """Test updating user."""
-    updated = user_repo.update(user=test_user, name="Updated Name")
+    user = await user_repo.get_by_id(test_user.id)
+    assert user is not None
+    updated = await user_repo.update(user=user, name="Updated Name")
 
     assert updated is not None
     assert updated.name == "Updated Name"

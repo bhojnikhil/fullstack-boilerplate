@@ -5,11 +5,11 @@ Replace this with your domain entity (Product, Post, Todo, etc.)
 
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.core.models import Base, TimestampMixin, UUIDMixin
 
 
 class Item(Base, UUIDMixin, TimestampMixin):
@@ -19,6 +19,7 @@ class Item(Base, UUIDMixin, TimestampMixin):
     """
 
     __tablename__ = "items"
+    __table_args__ = (Index("ix_items_user_created_id", "user_id", "created_at", "id"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False

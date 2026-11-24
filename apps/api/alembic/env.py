@@ -7,10 +7,11 @@ from sqlalchemy import create_engine, pool
 from alembic import context
 
 # Import your models here to auto-generate migrations
-from app.core.config import settings
-from app.models.base import Base
-from app.models.item import Item  # noqa: F401
-from app.models.user import User  # noqa: F401
+from app.core.config import DatabaseSettings
+from app.core.idempotency import IdempotencyRecord  # noqa: F401
+from app.core.models import Base
+from app.modules.auth.models import User  # noqa: F401
+from app.modules.items.models import Item  # noqa: F401
 
 # this is the Alembic Config object
 config = context.config
@@ -24,7 +25,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = settings.database_url
+    url = DatabaseSettings().database(migration=True)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -43,7 +44,7 @@ def run_migrations_online() -> None:
         migrate(connection)
         return
 
-    engine = create_engine(settings.database_url, poolclass=pool.NullPool)
+    engine = create_engine(DatabaseSettings().database(migration=True), poolclass=pool.NullPool)
     try:
         with engine.connect() as connection:
             migrate(connection)

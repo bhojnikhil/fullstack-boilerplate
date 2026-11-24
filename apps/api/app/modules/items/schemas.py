@@ -5,11 +5,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
 
 
 class ItemUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
     is_active: bool | None = None

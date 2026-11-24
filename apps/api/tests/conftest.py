@@ -1,101 +1,115 @@
-"""Pytest configuration and shared fixtures."""
+"""Test requests use the normal async unit of work on isolated Postgres schemas."""
 
 import os
-from collections.abc import Generator
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
 from alembic.config import Config
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, make_url
-from sqlalchemy.orm import Session, sessionmaker
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import URL, Connection
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from alembic import command
-from app.auth.security import hash_password
-from app.core.db import get_db
-from app.main import app
-from app.models.user import User
+from app.core.config import Settings, postgres_url
+from app.core.security import create_access_token, hash_password
+from app.main import create_app
+from app.modules.auth.models import User
 
 
 @pytest.fixture(scope="session")
-def database_url():
+def database_url() -> URL:
     raw = os.getenv("DATABASE_URL")
     if not raw:
         pytest.fail("Set DATABASE_URL to a dedicated Postgres test database or run make test.")
-    url = make_url(raw)
-    if url.drivername not in ("postgresql", "postgresql+psycopg"):
-        pytest.fail("DATABASE_URL must use Postgres with psycopg 3.")
-    return url.set(drivername="postgresql+psycopg")
+    return postgres_url(raw)
+
+
+def migration_config(connection: Connection) -> Config:
+    return Config("alembic.ini", attributes={"connection": connection})
 
 
 @pytest.fixture
-def test_db_engine(database_url):
-    """Use a fresh, migrated Postgres schema for every database test."""
-    admin = create_engine(database_url, poolclass=NullPool, connect_args={"connect_timeout": 3})
-    schema = f"test_{uuid4().hex}"
-    with admin.begin() as connection:
-        connection.execute(CreateSchema(schema))
-    engine = create_engine(
-        database_url,
-        poolclass=NullPool,
-        connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 3},
+async def test_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
+    admin = create_async_engine(
+        database_url, poolclass=NullPool, connect_args={"connect_timeout": 3}
     )
+    schema = f"test_{uuid4().hex}"
     try:
-        with engine.begin() as connection:
-            alembic = Config("alembic.ini", attributes={"connection": connection})
-            command.upgrade(alembic, "head")
-        yield engine
+        async with admin.begin() as connection:
+            await connection.execute(CreateSchema(schema))
+        engine = create_async_engine(
+            database_url,
+            poolclass=NullPool,
+            connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 3},
+        )
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(
+                    lambda conn: command.upgrade(migration_config(conn), "head")
+                )
+            yield engine
+        finally:
+            await engine.dispose()
+            async with admin.begin() as connection:
+                await connection.execute(DropSchema(schema, cascade=True))
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(DropSchema(schema, cascade=True))
-        admin.dispose()
+        await admin.dispose()
 
 
 @pytest.fixture
-def test_db(test_db_engine) -> Generator[Session]:
-    with sessionmaker(test_db_engine, expire_on_commit=False)() as session:
+def session_factory(test_db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(test_db_engine, expire_on_commit=False)
+
+
+@pytest.fixture
+async def test_db(session_factory) -> AsyncIterator[AsyncSession]:
+    async with session_factory() as session:
         yield session
 
 
 @pytest.fixture
-def client(test_db: Session) -> Generator[TestClient]:
-    """Create test client with test database."""
-
-    def override_get_db():
-        yield test_db
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    with TestClient(app) as test_client:
-        yield test_client
-
-    app.dependency_overrides.clear()
+def config() -> Settings:
+    return Settings(env="test", _env_file=None)
 
 
 @pytest.fixture
-def test_user(test_db: Session) -> User:
-    """Create test user."""
-    user = User(
-        email="test@example.com",
-        name="Test User",
-        hashed_password=hash_password("testpassword123"),
-        is_active=True,
-    )
-    test_db.add(user)
-    test_db.commit()
-    test_db.refresh(user)
+def app(config, session_factory):
+    return create_app(config, session_factory)
+
+
+@pytest.fixture
+async def client(app) -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def test_password_hash() -> str:
+    return hash_password("testpassword123")
+
+
+@pytest.fixture
+async def test_user(session_factory, test_password_hash: str) -> User:
+    async with session_factory.begin() as session:
+        user = User(
+            email="test@example.com",
+            name="Test User",
+            hashed_password=test_password_hash,
+            is_active=True,
+        )
+        session.add(user)
     return user
 
 
 @pytest.fixture
-def auth_headers(client: TestClient, test_user: User) -> dict[str, str]:
-    """Get authorization headers for test user."""
-    response = client.post(
-        "/auth/login",
-        json={"email": test_user.email, "password": "testpassword123"},
-    )
-    token = response.json()["access_token"]
+def auth_headers(test_user: User, config: Settings) -> dict[str, str]:
+    token = create_access_token({"sub": str(test_user.id)}, config)
     return {"Authorization": f"Bearer {token}"}

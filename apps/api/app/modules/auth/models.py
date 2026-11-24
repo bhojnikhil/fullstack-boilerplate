@@ -1,11 +1,16 @@
+import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
-from app.models.enums import OAuthProvider
+from app.core.models import Base, TimestampMixin, UUIDMixin
+
+
+class OAuthProvider(StrEnum):
+    GOOGLE = "google"
 
 
 class User(Base, UUIDMixin, TimestampMixin):
@@ -25,7 +30,7 @@ class OAuthAccount(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "oauth_accounts"
 
-    user_id: Mapped[UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     provider: Mapped[OAuthProvider] = mapped_column(String(50), nullable=False)
