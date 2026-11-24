@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # PostgreSQL Database
   postgres:
@@ -47,8 +45,11 @@ services:
       context: ./client
       dockerfile: Dockerfile
     container_name: boilerplate-client
+    # NEXT_PUBLIC_* values are inlined by `next build` (see next.config.js), and
+    # they are used by the browser, so this must be a host-reachable URL, not
+    # the in-network `http://api:8000`.
     environment:
-      NEXT_PUBLIC_API_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
     depends_on:

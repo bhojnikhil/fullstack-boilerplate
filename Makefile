@@ -1,109 +1,94 @@
-.PHONY: help up down logs build migrate migration db-shell test clean fresh
+.DEFAULT_GOAL := help
 
-# Color output
+# All Docker targets use the root docker-compose.yml
+# (services: postgres, api, client).
+COMPOSE ?= docker compose
+
 CYAN := \033[0;36m
 GREEN := \033[0;32m
-NC := \033[0m # No Color
+NC := \033[0m
+
+.PHONY: help up down logs ps build fresh migrate migration db-shell \
+	test test-coverage lint lint-backend lint-frontend \
+	typecheck typecheck-backend typecheck-frontend \
+	format format-backend format-frontend
 
 help: ## Show this help message
-	@echo "$(CYAN)Full-Stack Boilerplate$(NC)"
-	@echo ""
-	@echo "$(GREEN)Available Commands:$(NC)"
+	@printf "$(GREEN)Available commands:$(NC)\n"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(NC) %s\n", $$1, $$2}'
-	@echo ""
-	@echo "$(GREEN)Docker Commands:$(NC)"
-	@echo "  $(CYAN)make up$(NC)              Start all services (API, DB, Frontend)"
-	@echo "  $(CYAN)make down$(NC)            Stop all services"
-	@echo "  $(CYAN)make logs$(NC)            View service logs (follow mode)"
-	@echo "  $(CYAN)make build$(NC)           Rebuild all containers"
-	@echo "  $(CYAN)make fresh$(NC)           Complete reset (clean + rebuild + migrate)"
-	@echo ""
-	@echo "$(GREEN)Database Commands:$(NC)"
-	@echo "  $(CYAN)make migrate$(NC)         Run pending migrations"
-	@echo "  $(CYAN)make migration NAME=...$(NC) Create new migration"
-	@echo "  $(CYAN)make db-shell$(NC)        Connect to PostgreSQL shell"
-	@echo ""
-	@echo "$(GREEN)Development Commands:$(NC)"
-	@echo "  $(CYAN)make test$(NC)            Run backend tests"
-	@echo "  $(CYAN)make test-frontend$(NC)   Run frontend tests"
-	@echo ""
-	@echo "$(GREEN)Examples:$(NC)"
-	@echo "  $(CYAN)make migration NAME='add_column'$(NC)"
-	@echo "  $(CYAN)make test$(NC)"
-	@echo "  $(CYAN)make fresh$(NC)"
 
-# ======================== Docker Commands ========================
+# ============================== Docker ======================================
 
-up: ## Start all services
-	cd infra && docker-compose --profile dev up -d
-	@echo "$(GREEN)✓ Services started$(NC)"
+up: ## Start postgres, api and client in the background
+	$(COMPOSE) up -d
+	@printf "$(GREEN)✓ Services started$(NC)\n"
 	@echo "  Frontend: http://localhost:3000"
-	@echo "  API: http://localhost:8000"
-	@echo "  API Docs: http://localhost:8000/docs"
+	@echo "  API:      http://localhost:8000"
+	@echo "  API docs: http://localhost:8000/docs"
 
 down: ## Stop all services
-	cd infra && docker-compose --profile dev down
-	@echo "$(GREEN)✓ Services stopped$(NC)"
+	$(COMPOSE) down
 
-logs: ## View all service logs (follow)
-	cd infra && docker-compose --profile dev logs -f
+logs: ## Follow logs of all services
+	$(COMPOSE) logs -f
 
-build: ## Rebuild all containers
-	cd infra && docker-compose --profile dev build
-	@echo "$(GREEN)✓ Containers rebuilt$(NC)"
+ps: ## Show service status (including health)
+	$(COMPOSE) ps
 
-# ======================== Database Commands ========================
+build: ## Rebuild all images
+	$(COMPOSE) build
 
-migrate: ## Run pending migrations
-	cd infra && docker-compose exec api-dev alembic upgrade head
-	@echo "$(GREEN)✓ Migrations complete$(NC)"
+fresh: ## Full reset: stop, delete the database volume, rebuild, start, migrate
+	$(COMPOSE) down -v
+	$(COMPOSE) build
+	$(COMPOSE) up -d --wait postgres api
+	$(COMPOSE) up -d
+	$(COMPOSE) exec api alembic upgrade head
+	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
 
-migration: ## Create a new migration (use: make migration NAME='description')
+# ============================== Database ====================================
+
+migrate: ## Apply pending Alembic migrations (requires `make up`)
+	$(COMPOSE) exec api alembic upgrade head
+
+migration: ## Create an Alembic migration: make migration NAME='add_column'
 	@if [ -z "$(NAME)" ]; then \
-		echo "Error: NAME is required"; \
 		echo "Usage: make migration NAME='your_migration_name'"; \
 		exit 1; \
 	fi
-	cd infra && docker-compose exec api-dev alembic revision --autogenerate -m "$(NAME)"
-	@echo "$(GREEN)✓ Migration created$(NC)"
+	$(COMPOSE) exec api alembic revision --autogenerate -m "$(NAME)"
 
-db-shell: ## Connect to PostgreSQL shell
-	cd infra && docker-compose exec db psql -U postgres -d {{PROJECT_NAME}}
+db-shell: ## Open a psql shell on the dev database
+	$(COMPOSE) exec postgres psql -U postgres -d boilerplate
 
-# ======================== Development Commands ========================
+# ============================== Quality =====================================
 
-test: ## Run backend tests
-	cd infra && docker-compose exec api-dev pytest
-	@echo "$(GREEN)✓ Tests complete$(NC)"
+test: ## Run backend tests (inside the api container)
+	$(COMPOSE) exec api pytest
 
-test-coverage: ## Run backend tests with coverage report
-	cd infra && docker-compose exec api-dev pytest --cov=app
-	@echo "$(GREEN)✓ Coverage report generated$(NC)"
+test-coverage: ## Run backend tests with an HTML coverage report (api/htmlcov)
+	$(COMPOSE) exec api pytest --cov=app --cov-report=term-missing --cov-report=html
 
-test-frontend: ## Run frontend tests
-	cd client && npm test
+lint: lint-backend lint-frontend ## Lint backend and frontend
 
-lint-backend: ## Run backend linting
-	cd infra && docker-compose exec api-dev ruff check app
-	@echo "$(GREEN)✓ Backend linting complete$(NC)"
+lint-backend: ## Ruff lint (inside the api container)
+	$(COMPOSE) exec api ruff check .
 
-lint-frontend: ## Run frontend linting
+lint-frontend: ## ESLint via `next lint` (on the host; needs `npm ci` in client/)
 	cd client && npm run lint
 
-format-backend: ## Format backend code
-	cd infra && docker-compose exec api-dev ruff format app
-	@echo "$(GREEN)✓ Backend code formatted$(NC)"
+typecheck: typecheck-backend typecheck-frontend ## Type-check backend and frontend
 
-format-frontend: ## Format frontend code
+typecheck-backend: ## mypy (inside the api container)
+	$(COMPOSE) exec api mypy app
+
+typecheck-frontend: ## tsc --noEmit (on the host; needs `npm ci` in client/)
+	cd client && npm run type-check
+
+format: format-backend format-frontend ## Format backend and frontend code
+
+format-backend: ## Ruff format (inside the api container)
+	$(COMPOSE) exec api ruff format .
+
+format-frontend: ## Prettier (on the host; needs `npm ci` in client/)
 	cd client && npm run format
-
-# ======================== Full Reset ========================
-
-fresh: down build migrate up ## Complete reset (stop, rebuild, migrate, start)
-	@echo ""
-	@echo "$(GREEN)✓ Fresh start complete!$(NC)"
-	@echo "  Frontend: http://localhost:3000"
-	@echo "  API: http://localhost:8000"
-	@echo "  Docs: http://localhost:8000/docs"
-
-.SILENT: help logs
