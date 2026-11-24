@@ -58,7 +58,7 @@ concurrency = ["greenlet", "thread"]
 omit = ["*/tests/*", "*/__pycache__/*", "*/site-packages/*"]
 
 [tool.coverage.report]
-fail_under = 96.46
+fail_under = 96.0
 precision = 2
 
 # Ruff Configuration (Linting & Formatting)

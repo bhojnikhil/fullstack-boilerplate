@@ -7,8 +7,14 @@ from pydantic import ValidationError
 
 from app.core.config import LOCAL_SECRET, DatabaseSettings, Settings
 
+TEST_SETTINGS = {
+    "env": "test",
+    "secret_key": "test-secret-key-do-not-use-in-production-12345678",
+    "database_url": "postgresql://postgres:postgres@localhost/test_db",
+}
 
-@pytest.mark.parametrize("env", ["staging", "production"])
+
+@pytest.mark.parametrize("env", ["test", "staging", "production"])
 @pytest.mark.parametrize("secret", [None, "", "too-short", " " * 32, LOCAL_SECRET])
 def test_requires_secret_outside_local_environments(monkeypatch, env, secret):
     monkeypatch.delenv("SECRET_KEY", raising=False)
@@ -16,8 +22,8 @@ def test_requires_secret_outside_local_environments(monkeypatch, env, secret):
         Settings(env=env, secret_key=secret, _env_file=None)
 
 
-@pytest.mark.parametrize("env_name", [None, "production"])
-def test_boot_fails_without_production_secret(database_url, tmp_path, env_name):
+@pytest.mark.parametrize("env_name", [None, "production", "test"])
+def test_boot_fails_without_secret(database_url, tmp_path, env_name):
     env = {
         **os.environ,
         "DATABASE_URL": database_url.render_as_string(hide_password=False),
@@ -74,11 +80,13 @@ def test_config_from_env(monkeypatch):
             {"env": "production", "database_url": None, "secret_key": "a" * 32},
             "database URL is required",
         ),
+        ({"database_url": None}, "database URL is required"),
+        ({"env": "staging", "trusted_hosts": ["api.example"]}, "known test key"),
     ],
 )
 def test_rejects_misconfigured_settings(fields, message):
     with pytest.raises(ValidationError, match=message):
-        Settings(_env_file=None, **{"env": "test", **fields})
+        Settings(_env_file=None, **{**TEST_SETTINGS, **fields})
 
 
 @pytest.mark.parametrize(
@@ -100,12 +108,17 @@ def test_rejects_misconfigured_settings(fields, message):
 )
 def test_rejects_invalid_cors_origins(origin):
     with pytest.raises(ValidationError, match="cors_origins"):
-        Settings(env="test", cors_origins=[origin], _env_file=None)
+        Settings(cors_origins=[origin], _env_file=None, **TEST_SETTINGS)
 
 
-def test_accepts_explicit_cors_origins():
-    origins = ["https://web.example.com", "http://localhost:3000", "http://[::1]:3000"]
-    assert Settings(env="test", cors_origins=origins, _env_file=None).cors_origins == origins
+def test_lowercases_explicit_cors_origins():
+    origins = ["HTTPS://Web.Example.com", "http://LOCALHOST:3000", "http://[::AF]:3000"]
+    settings = Settings(cors_origins=origins, _env_file=None, **TEST_SETTINGS)
+    assert settings.cors_origins == [
+        "https://web.example.com",
+        "http://localhost:3000",
+        "http://[::af]:3000",
+    ]
 
 
 @pytest.mark.parametrize("env", ["staging", "production"])

@@ -72,8 +72,8 @@ smoke: ## Check the packaged containers and production API configuration
 	@set -eu; \
 	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
 	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres api web; \
-	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; then \
-		echo "API unexpectedly ready before migrations" >&2; exit 1; \
+	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && ! $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready 503; then \
+		echo "Expected HTTP 503 from /ready before migrations" >&2; exit 1; \
 	fi; \
 	$(COMPOSE) run --rm --no-deps api alembic upgrade head; \
 	$(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; \
@@ -104,7 +104,7 @@ ifndef TEST_DATABASE_URL
 	$(COMPOSE) up -d --wait postgres
 	printf '%s\n' "SELECT 'CREATE DATABASE boilerplate_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'boilerplate_test')" '\gexec' | $(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres
 endif
-	@cd $(API_DIR) && ENV=test DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
+	@cd $(API_DIR) && ENV=test SECRET_KEY="$$(openssl rand -hex 32)" DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
 
 lint: lint-api lint-web ## Lint everything
 

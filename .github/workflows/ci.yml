@@ -70,7 +70,7 @@ jobs:
           uv run --locked alembic check
 
       - name: Tests (pytest with coverage gate)
-        run: uv run --locked pytest
+        run: SECRET_KEY="$(openssl rand -hex 32)" uv run --locked pytest
 
   web:
     name: web (prettier, eslint, tsc, build)
@@ -136,6 +136,9 @@ jobs:
 
       - name: Test build-context ignore files
         run: ./scripts/test-dockerignore.sh
+
+      - name: Test loopback-only API and Postgres ports
+        run: bash scripts/test-compose-ports.sh
 
       - name: Build api dev target (used by docker-compose.yml)
         run: docker build --target dev apps/api

@@ -95,5 +95,5 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
-async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+def internal_error_response() -> JSONResponse:
     return error_response(500, "internal_error", "Internal server error")

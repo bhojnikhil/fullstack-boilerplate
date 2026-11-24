@@ -91,6 +91,17 @@ def test_unhealthy_on_timeout(server_url: str) -> None:
     assert healthcheck.check(f"{server_url}/slow", timeout=0.2) == 1
 
 
+@pytest.mark.parametrize(
+    ("path", "exit_code"), [("503", 0), ("500", 1), ("200", 1), ("redirect/302", 1)]
+)
+def test_exact_readiness_status(server_url: str, path: str, exit_code: int) -> None:
+    assert healthcheck.main([str(SCRIPT), f"{server_url}/{path}", "503"]) == exit_code
+
+
+def test_exact_readiness_status_rejects_connection_failure() -> None:
+    assert healthcheck.check("http://127.0.0.1:9/ready", timeout=0.5, expected_status=503) == 1
+
+
 def test_script_runs_with_stdlib_only(server_url: str) -> None:
     """``-I -S`` disables site-packages: the probe must not need third-party code."""
     ok = subprocess.run([sys.executable, "-I", "-S", str(SCRIPT), f"{server_url}/200"])

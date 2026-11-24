@@ -17,7 +17,6 @@ from app.core.errors import (
     ErrorEnvelope,
     domain_error_handler,
     http_error_handler,
-    internal_error_handler,
     validation_error_handler,
 )
 from app.core.idempotency import ReplayResponseError, replay_handler
@@ -64,7 +63,6 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
         version="1.0.0",
         lifespan=lifespan,
         exception_handlers={
-            Exception: internal_error_handler,
             ReplayResponseError: replay_handler,
             DomainError: domain_error_handler,
             HTTPException: http_error_handler,

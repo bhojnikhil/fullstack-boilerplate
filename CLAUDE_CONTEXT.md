@@ -58,12 +58,15 @@ scripts/                 template customization and container checks
 - Request logs contain the request ID, route template, method, status, duration and
   user ID when available. Exceptions include stack frames and types. Keep messages,
   locals, request bodies, raw URLs and query strings, credentials and provider responses
-  out of exception logs. The API and Alembic use JSON logs outside development.
+  out of exception logs. Development uses console logs with redacted tracebacks;
+  the API and Alembic use JSON logs outside development.
 - The API defaults to `ENV=production` and requires an explicit signing key and database URL
-  in staging and production. Compose development sets `ENV=development`.
+  in test, staging and production. Compose development sets `ENV=development` and publishes
+  the API and Postgres only on IPv4 loopback.
 - The container probes `/health` for liveness. Both probes bypass the host allowlist.
   `/ready` rejects an unreachable, unmigrated or behind database. An unknown revision is
-  accepted with a warning to support rolling deploys. Run Alembic using the direct
+  accepted with a warning that names the unknown IDs once per set per process to support
+  rolling deploys. Run Alembic using the direct
   connection when the application uses a pooler.
 
 ## Development and checks
@@ -80,9 +83,11 @@ make smoke                        # packaged API in production mode, migrations 
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres
-`DATABASE_URL`. The fixtures apply Alembic in a fresh schema for each database test,
+`DATABASE_URL` and a throwaway `SECRET_KEY` (`export SECRET_KEY="$(openssl rand -hex 32)"`).
+Use `uv run --locked pytest --no-cov tests/test_settings.py` to skip the suite-wide
+coverage gate for a targeted run. The fixtures apply Alembic in a fresh schema for each database test,
 including tests with concurrent requests. CI upgrades its Postgres service and runs
-`alembic check` before pytest. Plain pytest, `make test` and CI enforce the 96.46%
+`alembic check` before pytest. Plain pytest, `make test` and CI enforce the 96.0%
 branch-aware gate configured in `apps/api/pyproject.toml`, with greenlet and thread tracing.
 
 Check the current stable registry versions before choosing dependency versions.

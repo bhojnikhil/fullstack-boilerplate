@@ -3,16 +3,14 @@ from time import perf_counter
 from uuid import uuid4
 
 import structlog
-from starlette._utils import get_route_path
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Environment
-from app.core.errors import error_response, internal_error_handler
+from app.core.errors import error_response, internal_error_response
 
 log = structlog.get_logger()
 REQUEST_ID = "X-Request-Id"
@@ -34,9 +32,10 @@ class RequestContextMiddleware:
         request_id = supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else uuid4().hex
         context = structlog.contextvars.bind_contextvars(request_id=request_id)
         status = 500
+        started = False
 
         async def send_with_headers(message: Message) -> None:
-            nonlocal status
+            nonlocal status, started
             if message["type"] == "http.response.start":
                 status = message["status"]
                 headers = MutableHeaders(scope=message)
@@ -47,10 +46,16 @@ class RequestContextMiddleware:
                 headers["Referrer-Policy"] = "no-referrer"
                 if self.env != "development":
                     headers["Strict-Transport-Security"] = "max-age=31536000"
+                started = True
             await send(message)
 
         try:
             await self.app(scope, receive, send_with_headers)
+        except Exception:
+            log.exception("request_failed")
+            if started:
+                raise RuntimeError("Response stream failed") from None
+            await internal_error_response()(scope, receive, send_with_headers)
         finally:
             # Route templates exclude user-provided paths, parameters and query strings.
             route = scope.get("route")
@@ -86,14 +91,11 @@ class ErrorMiddleware:
 
         try:
             await self.app(scope, receive, track_response)
-        except Exception as exc:
-            # Exception text (including SQL, provider payloads and credentials) stays private.
-            log.exception("request_failed")
+        except Exception:
             if started:
-                # It is too late to send an envelope. Abort the stream without exposing the error.
-                raise RuntimeError("Response stream failed") from None
-            response = await internal_error_handler(Request(scope), exc)
-            await response(scope, receive, send)
+                raise
+            log.exception("request_failed")
+            await internal_error_response()(scope, receive, send)
 
 
 class TrustedHostEnvelopeMiddleware:
@@ -106,9 +108,14 @@ class TrustedHostEnvelopeMiddleware:
         """The host check calls this no-op only when the request may proceed."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and get_route_path(scope) in {"/health", "/ready"}:
-            await self.app(scope, receive, send)
-            return
+        if scope["type"] == "http":
+            path = scope["path"]
+            root_path = scope.get("root_path", "")
+            if path == root_path or path.startswith(f"{root_path}/"):
+                path = path.removeprefix(root_path)
+            if path in {"/health", "/ready"}:
+                await self.app(scope, receive, send)
+                return
 
         rejected = False
 

@@ -1,5 +1,6 @@
 from asyncio import timeout
 from pathlib import Path
+from threading import Lock
 
 import structlog
 from alembic.config import Config
@@ -14,6 +15,16 @@ from app.core.errors import DomainError, ErrorCode, ErrorEnvelope
 
 router = APIRouter(tags=["health"])
 log = structlog.get_logger()
+reported_unknown_sets: set[frozenset[str]] = set()
+reported_unknown_sets_lock = Lock()
+
+
+def warn_unknown_revisions(revisions: frozenset[str]) -> None:
+    with reported_unknown_sets_lock:
+        if revisions in reported_unknown_sets:
+            return
+        reported_unknown_sets.add(revisions)
+    log.warning("database_revision_unknown", unknown_revision_ids=sorted(revisions))
 
 
 def shipped_revisions() -> tuple[set[str], set[str]]:
@@ -48,7 +59,7 @@ async def readiness_check(request: Request) -> dict[str, str]:
     unknown = heads - known_revisions
     if unknown:
         # Newer deploys can advance the schema while this image is still serving traffic.
-        log.warning("database_revision_unknown", unknown_revision_count=len(unknown))
+        warn_unknown_revisions(frozenset(unknown))
     elif heads != shipped_heads:
         raise DomainError(ErrorCode.NOT_READY)
     return {"status": "ok"}

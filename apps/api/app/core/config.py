@@ -10,7 +10,9 @@ from sqlalchemy.exc import ArgumentError
 Environment = Literal["development", "test", "staging", "production"]
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/boilerplate"
 LOCAL_SECRET = "dev-secret-key-change-in-production"
-ORIGIN_PATTERN = re.compile(r"https?://(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:.]+\])(?::[0-9]+)?")
+ORIGIN_PATTERN = re.compile(
+    r"https?://(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]+)?", re.IGNORECASE | re.ASCII
+)
 
 
 def postgres_url(value: str) -> URL:
@@ -38,9 +40,9 @@ class DatabaseSettings(BaseSettings):
             configured = self.database_url
         if configured and configured.get_secret_value():
             return postgres_url(configured.get_secret_value())
-        if self.env in {"development", "test"}:
+        if self.env == "development":
             return postgres_url(DEFAULT_DATABASE_URL)
-        raise ValueError("A database URL is required in staging and production")
+        raise ValueError("A database URL is required outside development")
 
 
 class Settings(DatabaseSettings):
@@ -66,7 +68,7 @@ class Settings(DatabaseSettings):
                     "CORS origins must be explicit HTTP(S) origins (scheme://host[:port])"
                 )
             HttpUrl(origin)
-        return origins
+        return [origin.lower() for origin in origins]
 
     @field_validator("trusted_hosts")
     @classmethod
@@ -78,21 +80,20 @@ class Settings(DatabaseSettings):
 
     @property
     def signing_key(self) -> str:
-        if self.secret_key is None:
+        if self.secret_key is not None:
+            return self.secret_key.get_secret_value()
+        if self.env == "development":
             return LOCAL_SECRET
-        return self.secret_key.get_secret_value()
+        raise ValueError("SECRET_KEY is required outside development")
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
-        if self.env in {"staging", "production"} and (
-            len(self.signing_key.strip()) < 32
-            or self.signing_key
-            in {
-                LOCAL_SECRET,
-                "test-secret-key-do-not-use-in-production-12345678",
-            }
-        ):
-            raise ValueError("SECRET_KEY must be a unique secret of at least 32 characters")
+        if self.env != "development":
+            key = self.signing_key
+            if len(key.strip()) < 32 or key == LOCAL_SECRET:
+                raise ValueError("SECRET_KEY must be a unique secret of at least 32 characters")
+            if self.env != "test" and key == "test-secret-key-do-not-use-in-production-12345678":
+                raise ValueError("SECRET_KEY cannot be the known test key in staging or production")
         if self.env in {"staging", "production"} and "*" in self.trusted_hosts:
             raise ValueError("TRUSTED_HOSTS cannot contain '*' in staging or production")
         self.database()

@@ -1,6 +1,7 @@
+import json
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TextIO
 
 import structlog
 from structlog.processors import ExceptionRenderer
@@ -27,12 +28,16 @@ def safe_tracebacks(exc_info: ExcInfo) -> list[dict[str, Any]]:
     return stacks
 
 
+def render_console_traceback(stream: TextIO, exc_info: ExcInfo) -> None:
+    stream.write("\n" + json.dumps(safe_tracebacks(exc_info), indent=2))
+
+
 def configure_logging(env: Environment) -> None:
-    renderer: Processor = (
-        structlog.dev.ConsoleRenderer()
-        if env == "development"
-        else structlog.processors.JSONRenderer()
-    )
+    renderers: Sequence[Processor]
+    if env == "development":
+        renderers = [structlog.dev.ConsoleRenderer(exception_formatter=render_console_traceback)]
+    else:
+        renderers = [ExceptionRenderer(safe_tracebacks), structlog.processors.JSONRenderer()]
     shared_processors: Sequence[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -50,8 +55,7 @@ def configure_logging(env: Environment) -> None:
             foreign_pre_chain=shared_processors,
             processors=[
                 ProcessorFormatter.remove_processors_meta,
-                ExceptionRenderer(safe_tracebacks),
-                renderer,
+                *renderers,
             ],
         )
     )

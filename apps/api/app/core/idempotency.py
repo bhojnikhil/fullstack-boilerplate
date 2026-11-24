@@ -72,8 +72,7 @@ async def begin_idempotency(
         raise DomainError(ErrorCode.INVALID_IDEMPOTENCY_KEY)
 
     target = (request.method.encode(), request.url.path.encode(), request.scope["query_string"])
-    content_type = request.headers.get("content-type", "")
-    media_type = content_type.partition(";")[0].strip().lower()
+    media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
     body = await request.body()
     digest = request_digest((*target, media_type.encode(), body))
 
@@ -86,11 +85,6 @@ async def begin_idempotency(
     record = await db.get(IdempotencyRecord, (user_id, key))
     if record is not None and record.expires_at > datetime.now(UTC):
         if record.request_hash == digest:
-            raise ReplayResponseError(record)
-        # Pre-normalization records may still be within their replay window.
-        if content_type != media_type and record.request_hash == request_digest(
-            (*target, content_type.encode(), body)
-        ):
             raise ReplayResponseError(record)
         raise DomainError(ErrorCode.IDEMPOTENCY_MISMATCH)
 

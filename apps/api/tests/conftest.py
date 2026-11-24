@@ -80,8 +80,13 @@ async def test_db(session_factory) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-def config() -> Settings:
-    return Settings(env="test", _env_file=None)
+def config(database_url: URL) -> Settings:
+    return Settings(
+        env="test",
+        database_url=database_url.render_as_string(hide_password=False),
+        secret_key=os.environ["SECRET_KEY"],
+        _env_file=None,
+    )
 
 
 @pytest.fixture

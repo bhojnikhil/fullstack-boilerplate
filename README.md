@@ -47,6 +47,7 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   headers and a configurable request body limit. Request logs use route templates and
   include request ID, method, status, duration and the user ID when available. Exception
   logs include structured stack frames and exception types, with messages and locals omitted.
+  Development uses console logs with a redacted traceback; other environments use JSON.
 - `GET /health` checks liveness without Postgres. `GET /ready` checks DB connectivity
   and the applied Alembic revision. Both probes accept the platform's Host header,
   including the container's loopback Host. The host allowlist applies to other routes.
@@ -79,16 +80,16 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - GitHub Actions (`.github/workflows/ci.yml`), with every third-party action pinned to a
   commit SHA:
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
-    drift check, and pytest on Postgres 16 with a 96.46% branch-aware coverage gate.
+    drift check, and pytest on Postgres 16 with a 96.0% branch-aware coverage gate.
   - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
     `next build` via Turborepo;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
     api and web as packaged, and require all to be healthy. The API smoke uses production
     settings, a temporary signing key and a host allowlist that excludes loopback. It
-    checks HSTS, JSON logs and startup failure without a key. CI checks readiness
-    before and after explicit migrations. The API and web must run as unprivileged
-    users with no mounts. Locally use `make smoke`.
+    checks HSTS, JSON logs and startup failure without a key. CI requires `/ready`
+    to return HTTP 503 before explicit migrations and 2xx afterward. The API and web
+    must run as unprivileged users with no mounts. Locally use `make smoke`.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -119,8 +120,9 @@ to apply migrations. The Compose development API bind-mounts `apps/api` and read
 `.env`, with Compose's service environment taking precedence. The packaged image reads
 its process environment.
 
-The default host ports are 5432, 8000 and 3000. Set `POSTGRES_PORT`, `API_PORT`,
-and `WEB_PORT` on the command line if those ports are in use.
+Compose publishes Postgres and the API on IPv4 loopback (`127.0.0.1`) only, on host
+ports 5432 and 8000 by default. The web port defaults to 3000. Set `POSTGRES_PORT`,
+`API_PORT`, and `WEB_PORT` on the command line if those ports are in use.
 
 ## Upgrading an existing checkout
 
@@ -182,12 +184,12 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `ENV` | `production` | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS. |
-| `DATABASE_URL` | Local Compose Postgres in development and test | Required in staging and production. Use the Neon pooled URL for the app. |
+| `DATABASE_URL` | Local Compose Postgres in development only | Required in test, staging and production. Use the Neon pooled URL for the app. |
 | `MIGRATION_DATABASE_URL` | Falls back to `DATABASE_URL` | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`. |
-| `SECRET_KEY` | Local development/test fallback | Set a unique secret of at least 32 characters in staging and production. |
+| `SECRET_KEY` | Local development fallback only | Set a unique secret of at least 32 characters in test, staging and production. |
 | `JWT_ALGORITHM` | `HS256` | Signing algorithm. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | JWT lifetime in minutes. |
-| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Omit paths, even a trailing slash. |
+| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased. Omit paths, even a trailing slash. |
 | `TRUSTED_HOSTS` | `["localhost","127.0.0.1","[::1]"]` | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host. |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum HTTP body size in bytes, including chunked requests. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Unset | Optional pair. Set both to enable Google OAuth. |
@@ -197,7 +199,8 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 
 Run the Alembic upgrade with the direct connection before starting new API
 instances. `/ready` returns 503 if the DB is unreachable, unmigrated or behind the
-image. An unknown revision is treated as newer and logs a warning. During a rolling
+image. Unknown revisions are treated as newer; the API logs their IDs once per distinct
+set per process. During a rolling
 release, keep migrations compatible with instances of the previous release. See [ADR 0004](docs/adr/0004-async-postgres.md).
 
 **Web** (`apps/web/.env.local`):
@@ -251,12 +254,15 @@ short ASCII `X-Request-Id` tracing token or generates one, and returns it on res
 `make test` creates and uses the dedicated `boilerplate_test` database on Compose
 Postgres. To use another dedicated Postgres database, run
 `make test TEST_DATABASE_URL=postgresql://user:password@host/dbname`. With pytest
-directly, set `ENV=test` and `DATABASE_URL` to that database. The test user needs
+directly, run from `apps/api` with `ENV=test`, `DATABASE_URL` set to that database,
+and a throwaway `SECRET_KEY` (for example, `export SECRET_KEY="$(openssl rand -hex 32)"`).
+For a targeted run, use `uv run --locked pytest --no-cov tests/test_settings.py` to
+skip the suite-wide coverage gate. The test user needs
 permission to create schemas. Each database test applies Alembic to its own schema
 and drops the schema afterward. HTTP tests use httpx's ASGI transport and real
 request transactions. CI applies migrations to its Postgres 16 service, runs
 `alembic check` for schema drift and runs the same suite. Plain pytest, `make test`
-and CI share the 96.46% branch-aware coverage gate in `apps/api/pyproject.toml`,
+and CI share the 96.0% branch-aware coverage gate in `apps/api/pyproject.toml`,
 with greenlet and thread tracing enabled.
 
 ## Adding a domain entity
@@ -270,8 +276,10 @@ router in `app/main.py`. [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) describes the co
 **`Illegal instruction` (exit code 132) when running the API in Docker on an Apple M4
 Mac.** We have seen OpenSSL, as loaded by the Python `cryptography` package, crash inside
 Linux containers on an M4 Pro (Docker Desktop, engine 27.5). Setting `OPENSSL_armcap=0`
-in the container environment avoids it (verified). Updating Docker Desktop may also fix
-it; we have not verified that.
+in the container environment avoids it (verified). Set it on the `api` service in a
+local Compose override. For `make smoke`, also pass `OPENSSL_armcap=0` in the host
+environment so the smoke script applies it to the standalone missing-key test.
+Updating Docker Desktop may also fix it; we have not verified that.
 
 **`Cannot find module .../corepack/.../pnpm.cjs`.** An older Corepack can't launch
 pnpm 12. Install pnpm directly (`npm install -g pnpm@12.23.0`) and make sure it comes

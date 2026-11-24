@@ -17,7 +17,7 @@ Apply migrations separately with Alembic against a direct connection. The app ca
 use a Neon pooled connection with psycopg's automatic prepared statements disabled.
 Readiness rejects unreachable databases, missing revisions and known revisions
 behind the shipped heads. It accepts the shipped heads or revisions unknown to
-this image, logging a warning when it assumes an unknown revision is newer.
+this image, logging the unknown revision IDs once per distinct set per process.
 During a rolling deploy, a new image can advance the database while old instances
 are still serving traffic. Requiring an exact head would make those instances
 unready before they can be replaced. Use expand/contract migrations. Apply

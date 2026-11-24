@@ -9,9 +9,10 @@ from app.core.logging import configure_logging
 @pytest.mark.parametrize(
     "name", ["uvicorn.error", "sqlalchemy.engine", "alembic.runtime.migration"]
 )
-def test_stdlib_logs_are_json_and_redact_nested_exceptions(name, capsys):
+@pytest.mark.parametrize("env", ["production", "development"])
+def test_stdlib_logs_render_and_redact_nested_exceptions(name, capsys, env):
     logger = logging.getLogger(name)
-    configure_logging("production")
+    configure_logging(env)
     logger.warning("stdlib log line")
     try:
         cause = ValueError("private cause")
@@ -21,10 +22,18 @@ def test_stdlib_logs_are_json_and_redact_nested_exceptions(name, capsys):
         logger.exception("stdlib exception")
 
     output = capsys.readouterr().err
-    line, error = map(json.loads, output.splitlines())
-    assert line["logger"] == error["logger"] == name
-    assert line["event"] == "stdlib log line"
-    assert line["level"] == "warning"
-    assert error["event"] == "stdlib exception"
-    assert error["exception"][0]["exceptions"][0][0]["exc_type"] == "ValueError"
+    assert "Logging error" not in output
+    if env == "development":
+        warning, error, traceback = output.split("\n", 2)
+        assert "stdlib log line" in warning and name in warning
+        assert "stdlib exception" in error and name in error
+        stacks = json.loads(traceback)
+    else:
+        line, error = map(json.loads, output.splitlines())
+        assert line["logger"] == error["logger"] == name
+        assert line["event"] == "stdlib log line"
+        assert line["level"] == "warning"
+        assert error["event"] == "stdlib exception"
+        stacks = error["exception"]
+    assert stacks[0]["exceptions"][0][0]["exc_type"] == "ValueError"
     assert "private" not in output

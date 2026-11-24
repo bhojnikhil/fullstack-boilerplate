@@ -32,8 +32,11 @@ image=$(docker inspect --format '{{.Image}}' "$container")
 # Test the image outside Compose so the overlay cannot supply the production default.
 # Bound startup time so a regression that boots without a key fails quickly.
 status=0
-output=$(docker run --rm --env DATABASE_URL=postgresql://postgres:postgres@localhost/boilerplate \
-    --env OPENSSL_armcap --entrypoint sh "$image" -ec \
+run_args=(--rm --env DATABASE_URL=postgresql://postgres:postgres@localhost/boilerplate)
+if [[ -n ${OPENSSL_armcap:-} ]]; then
+    run_args+=(--env "OPENSSL_armcap=$OPENSSL_armcap")
+fi
+output=$(docker run "${run_args[@]}" --entrypoint sh "$image" -ec \
     'test "$ENV" = production; exec timeout 10s uvicorn app.main:app --no-access-log' 2>&1) || status=$?
 if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [[ "$output" != *SECRET_KEY* ]]; then
     echo "Packaged API did not reject a missing SECRET_KEY (exit $status)" >&2
