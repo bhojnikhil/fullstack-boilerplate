@@ -1,0 +1,93 @@
+"""Pytest configuration and shared fixtures."""
+
+from collections.abc import Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.auth.security import hash_password
+from app.core.db import get_db
+from app.main import app
+from app.models.base import Base
+from app.models.user import User
+
+# In-memory SQLite: nothing is written to disk. StaticPool keeps the single
+# in-memory database alive and shared across connections for the session.
+TEST_SQLALCHEMY_DATABASE_URL = "sqlite://"
+
+
+@pytest.fixture(scope="session")
+def test_db_engine():
+    """Create test database engine."""
+    engine = create_engine(
+        TEST_SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def test_db(test_db_engine) -> Generator[Session]:
+    """Create test database session."""
+    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=test_db_engine)
+
+    connection = test_db_engine.connect()
+    transaction = connection.begin()
+    session = testing_session_local(bind=connection)
+
+    # Clear all tables before each test
+    Base.metadata.drop_all(bind=connection)
+    Base.metadata.create_all(bind=connection)
+
+    yield session
+
+    session.close()
+    transaction.rollback()
+    connection.close()
+
+
+@pytest.fixture
+def client(test_db: Session) -> Generator[TestClient]:
+    """Create test client with test database."""
+
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def test_user(test_db: Session) -> User:
+    """Create test user."""
+    user = User(
+        email="test@example.com",
+        name="Test User",
+        hashed_password=hash_password("testpassword123"),
+        is_active=True,
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+    return user
+
+
+@pytest.fixture
+def auth_headers(client: TestClient, test_user: User) -> dict[str, str]:
+    """Get authorization headers for test user."""
+    response = client.post(
+        "/auth/login",
+        json={"email": test_user.email, "password": "testpassword123"},
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}

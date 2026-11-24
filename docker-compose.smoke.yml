@@ -1,11 +1,13 @@
-# Smoke-test overlay: run the api exactly as packaged in its image.
-# The dev compose file bind-mounts ./api over /app and runs uvicorn --reload;
-# here both are removed, so the HEALTHCHECK exercises the probe and app files
-# that were actually built into the image.
+# Smoke-test overlay: run the images exactly as packaged.
+# The dev compose file builds the api `dev` target, bind-mounts ./apps/api over
+# /app and runs uvicorn --reload. Here the api uses the production `runtime`
+# target with its own CMD and no mounts, so the HEALTHCHECKs exercise the files
+# that were actually built into the images.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.smoke.yml up -d --wait postgres api
+#   docker compose -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait postgres api web
 #   (or: make smoke)
 services:
   api:
+    build:
+      target: runtime
     volumes: !reset []
-    command: !reset []

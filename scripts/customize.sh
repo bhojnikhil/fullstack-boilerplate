@@ -5,8 +5,8 @@
 #
 # - Replaces {{PROJECT_NAME}}, {{APP_NAME}} and {{DOMAIN}} in text files
 #   (skips .git, node_modules, .venv, .next and other generated directories).
-# - Creates api/.env and client/.env.local from their .env.example files if
-#   they do not exist, and writes a freshly generated SECRET_KEY into api/.env
+# - Creates apps/api/.env and apps/web/.env.local from their .env.example files if
+#   they do not exist, and writes a freshly generated SECRET_KEY into apps/api/.env
 #   ONLY. The tracked .env.example files keep their placeholders, so no secret
 #   ever lands in a committed file.
 # - Safe to re-run: files without placeholders are left untouched and existing
@@ -80,7 +80,7 @@ while IFS= read -r -d '' file; do
 done < <(
     find . \
         \( -name .git -o -name node_modules -o -name .venv -o -name venv \
-           -o -name .next -o -name dist -o -name build -o -name __pycache__ \
+           -o -name .next -o -name .turbo -o -name dist -o -name build -o -name __pycache__ \
            -o -name .mypy_cache -o -name .ruff_cache -o -name .pytest_cache \) -prune \
         -o -type f \
         \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
@@ -92,23 +92,23 @@ done < <(
 printf "${GREEN}✓${NC} Replaced placeholders in %d file(s)\n" "$count"
 
 # --- Local env files (untracked) --------------------------------------------
-if [ ! -f api/.env ]; then
-    cp api/.env.example api/.env
-    echo "  created api/.env"
+if [ ! -f apps/api/.env ]; then
+    cp apps/api/.env.example apps/api/.env
+    echo "  created apps/api/.env"
 fi
-if grep -q '{{GENERATE_SECRET_KEY}}' api/.env; then
+if grep -q '{{GENERATE_SECRET_KEY}}' apps/api/.env; then
     SECRET_KEY=$(openssl rand -hex 32)
-    sed_inplace -e "s|{{GENERATE_SECRET_KEY}}|${SECRET_KEY}|g" api/.env
-    echo "  generated SECRET_KEY in api/.env"
+    sed_inplace -e "s|{{GENERATE_SECRET_KEY}}|${SECRET_KEY}|g" apps/api/.env
+    echo "  generated SECRET_KEY in apps/api/.env"
 fi
 
-if [ ! -f client/.env.local ]; then
-    cp client/.env.example client/.env.local
-    echo "  created client/.env.local"
+if [ ! -f apps/web/.env.local ]; then
+    cp apps/web/.env.example apps/web/.env.local
+    echo "  created apps/web/.env.local"
 fi
 
 printf "${GREEN}✓ Done.${NC}\n\n"
 echo "Next steps:"
-echo "  1. Review api/.env and client/.env.local"
-echo "  2. make up            # postgres, api, client"
+echo "  1. Review apps/api/.env and apps/web/.env.local"
+echo "  2. make up            # postgres, api, web"
 echo "  3. Open http://localhost:3000/auth/register to create a user"

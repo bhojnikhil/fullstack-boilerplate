@@ -1,7 +1,8 @@
+# Local development stack: postgres, api (hot reload), web.
+# `make up` starts it; see docker-compose.smoke.yml for the as-packaged check.
 services:
-  # PostgreSQL Database
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.16-alpine
     container_name: boilerplate-postgres
     environment:
       POSTGRES_USER: postgres
@@ -17,11 +18,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # FastAPI Backend
+  # FastAPI backend. Uses the `dev` image target (dev tools, --reload) with the
+  # source bind-mounted; the virtualenv lives at /opt/venv, outside the mount.
   api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: ./apps/api
+      target: dev
     container_name: boilerplate-api
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
@@ -36,22 +38,22 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./api:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - ./apps/api:/app
 
-  # Next.js Frontend
-  client:
-    # Runs the production build (`next start`); rebuild to pick up changes
-    # (`docker compose up -d --build client`), or use `npm run dev` in client/.
+  # Next.js frontend. Runs the production build (standalone `server.js`);
+  # rebuild to pick up changes (`docker compose up -d --build web`), or use
+  # `make dev` for hot reload (web dev server on the host).
+  web:
     build:
-      context: ./client
-      dockerfile: Dockerfile
+      # Repository root: the pnpm workspace and lockfile live there.
+      context: .
+      dockerfile: apps/web/Dockerfile
       # NEXT_PUBLIC_* values are inlined by `next build`, so they are build
       # args, not runtime env. The browser uses this URL, so it must be
       # host-reachable (not the in-network `http://api:8000`).
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    container_name: boilerplate-client
+    container_name: boilerplate-web
     ports:
       - "3000:3000"
     depends_on:

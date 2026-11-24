@@ -1,5 +1,5 @@
 # Patterns are intentionally unanchored so they apply in every package
-# (api/, client/, and future apps/* and packages/*).
+# (apps/* and packages/*).
 
 # ---------------------------------------------------------------------------
 # Secrets and local environment
