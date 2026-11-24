@@ -23,8 +23,9 @@ jobs:
       run:
         working-directory: apps/api
 
-    # Only for the app's startup create_all() hook: tests/conftest.py runs the
-    # suite itself on in-memory SQLite (moving it to Postgres is Phase 3).
+    env:
+      ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
     services:
       postgres:
         image: postgres:16.16-alpine
@@ -63,9 +64,12 @@ jobs:
       - name: Type check (mypy)
         run: uv run --locked mypy app healthcheck.py
 
+      - name: Migrate and check for schema drift
+        run: |
+          uv run --locked alembic upgrade head
+          uv run --locked alembic check
+
       - name: Tests (pytest)
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         run: uv run --locked pytest
 
   web:

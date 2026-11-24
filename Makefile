@@ -7,7 +7,12 @@ COMPOSE ?= docker compose
 
 API_DIR := apps/api
 # Host-side Python commands (tests, migrations) talk to the compose Postgres.
-DATABASE_URL ?= postgresql://postgres:postgres@localhost:5432/boilerplate
+POSTGRES_PORT ?= 5432
+API_PORT ?= 8000
+WEB_PORT ?= 3000
+export POSTGRES_PORT API_PORT WEB_PORT
+
+DATABASE_URL ?= postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate
 export DATABASE_URL
 
 CYAN := \033[0;36m
@@ -78,8 +83,12 @@ db-shell: ## Open a psql shell on the dev database
 
 # ============================== Quality =====================================
 
-test: ## Run API tests (needs Postgres, e.g. `make up` or `docker compose up -d postgres`)
-	cd $(API_DIR) && $(UV) run --locked pytest
+test: ## Run API tests against a dedicated Postgres database (override TEST_DATABASE_URL)
+ifndef TEST_DATABASE_URL
+	$(COMPOSE) up -d --wait postgres
+	printf '%s\n' "SELECT 'CREATE DATABASE boilerplate_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'boilerplate_test')" '\gexec' | $(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres
+endif
+	cd $(API_DIR) && ENV=test DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
 
 lint: lint-api lint-web ## Lint everything
 

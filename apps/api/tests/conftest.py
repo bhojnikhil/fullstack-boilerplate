@@ -1,55 +1,63 @@
 """Pytest configuration and shared fixtures."""
 
+import os
 from collections.abc import Generator
+from uuid import uuid4
 
 import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
+from sqlalchemy.schema import CreateSchema, DropSchema
 
+from alembic import command
 from app.auth.security import hash_password
 from app.core.db import get_db
 from app.main import app
-from app.models.base import Base
 from app.models.user import User
-
-# In-memory SQLite: nothing is written to disk. StaticPool keeps the single
-# in-memory database alive and shared across connections for the session.
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite://"
 
 
 @pytest.fixture(scope="session")
-def test_db_engine():
-    """Create test database engine."""
+def database_url():
+    raw = os.getenv("DATABASE_URL")
+    if not raw:
+        pytest.fail("Set DATABASE_URL to a dedicated Postgres test database or run make test.")
+    url = make_url(raw)
+    if url.drivername not in ("postgresql", "postgresql+psycopg"):
+        pytest.fail("DATABASE_URL must use Postgres with psycopg 3.")
+    return url.set(drivername="postgresql+psycopg")
+
+
+@pytest.fixture
+def test_db_engine(database_url):
+    """Use a fresh, migrated Postgres schema for every database test."""
+    admin = create_engine(database_url, poolclass=NullPool, connect_args={"connect_timeout": 3})
+    schema = f"test_{uuid4().hex}"
+    with admin.begin() as connection:
+        connection.execute(CreateSchema(schema))
     engine = create_engine(
-        TEST_SQLALCHEMY_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        database_url,
+        poolclass=NullPool,
+        connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 3},
     )
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    Base.metadata.drop_all(bind=engine)
+    try:
+        with engine.begin() as connection:
+            alembic = Config("alembic.ini", attributes={"connection": connection})
+            command.upgrade(alembic, "head")
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(DropSchema(schema, cascade=True))
+        admin.dispose()
 
 
 @pytest.fixture
 def test_db(test_db_engine) -> Generator[Session]:
-    """Create test database session."""
-    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=test_db_engine)
-
-    connection = test_db_engine.connect()
-    transaction = connection.begin()
-    session = testing_session_local(bind=connection)
-
-    # Clear all tables before each test
-    Base.metadata.drop_all(bind=connection)
-    Base.metadata.create_all(bind=connection)
-
-    yield session
-
-    session.close()
-    transaction.rollback()
-    connection.close()
+    with sessionmaker(test_db_engine, expire_on_commit=False)() as session:
+        yield session
 
 
 @pytest.fixture
