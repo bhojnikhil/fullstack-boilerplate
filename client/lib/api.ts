@@ -64,7 +64,7 @@ class ApiClient {
   }
 
   updateItem(id: string, title: string, description: string) {
-    return this.client.put(`/items/${id}`, { title, description });
+    return this.client.patch(`/items/${id}`, { title, description });
   }
 
   deleteItem(id: string) {
