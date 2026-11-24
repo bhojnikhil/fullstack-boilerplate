@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { FormError, TextField } from "@/components/form";
+import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
 
 export default function RegisterPage() {
@@ -32,79 +34,62 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="container">
-      <div className="card" style={{ maxWidth: "400px", margin: "2rem auto" }}>
-        <h1>Register</h1>
+    <section className="mx-auto max-w-md rounded-xl border bg-card p-6 sm:p-8">
+      <h1 className="text-3xl font-semibold tracking-tight">Register</h1>
 
-        <form onSubmit={handleSubmit} style={{ marginTop: "1.5rem" }}>
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="name">Name</label>
-            <input
-              id="name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+      <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
+        <TextField
+          label="Name"
+          id="name"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+        <TextField
+          label="Email"
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+        <TextField
+          label="Password"
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="confirm-password">Confirm Password</label>
-            <input
-              id="confirm-password"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+        <TextField
+          label="Confirm Password"
+          id="confirm-password"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          required
+        />
 
-          {(error || formError) && (
-            <div className="error" style={{ marginBottom: "1rem" }}>
-              {error || formError}
-            </div>
-          )}
+        <FormError message={error || formError} />
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="button"
-            style={{ width: "100%" }}
-          >
-            {isLoading ? "Registering..." : "Register"}
-          </button>
-        </form>
+        <Button type="submit" disabled={isLoading} className="w-full">
+          {isLoading ? "Registering..." : "Register"}
+        </Button>
+      </form>
 
-        <p style={{ marginTop: "1rem", textAlign: "center" }}>
-          Already have an account? <Link href="/auth/login">Login here</Link>
-        </p>
-      </div>
-    </div>
+      <p className="mt-4 text-center text-sm">
+        Already have an account?{" "}
+        <Link
+          href="/auth/login"
+          className="font-medium text-primary underline underline-offset-4"
+        >
+          Login here
+        </Link>
+      </p>
+    </section>
   );
 }

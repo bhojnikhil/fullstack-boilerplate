@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { FormError, TextField } from "@/components/form";
+import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
 
 export default function LoginPage() {
@@ -25,55 +27,44 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="container">
-      <div className="card" style={{ maxWidth: "400px", margin: "2rem auto" }}>
-        <h1>Login</h1>
+    <section className="mx-auto max-w-md rounded-xl border bg-card p-6 sm:p-8">
+      <h1 className="text-3xl font-semibold tracking-tight">Login</h1>
 
-        <form onSubmit={handleSubmit} style={{ marginTop: "1.5rem" }}>
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+      <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
+        <TextField
+          label="Email"
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{ width: "100%", marginTop: "0.5rem" }}
-            />
-          </div>
+        <TextField
+          label="Password"
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
 
-          {(error || formError) && (
-            <div className="error" style={{ marginBottom: "1rem" }}>
-              {error || formError}
-            </div>
-          )}
+        <FormError message={error || formError} />
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="button"
-            style={{ width: "100%" }}
-          >
-            {isLoading ? "Logging in..." : "Login"}
-          </button>
-        </form>
+        <Button type="submit" disabled={isLoading} className="w-full">
+          {isLoading ? "Logging in..." : "Login"}
+        </Button>
+      </form>
 
-        <p style={{ marginTop: "1rem", textAlign: "center" }}>
-          Don&apos;t have an account? <Link href="/auth/register">Register here</Link>
-        </p>
-      </div>
-    </div>
+      <p className="mt-4 text-center text-sm">
+        Don&apos;t have an account?{" "}
+        <Link
+          href="/auth/register"
+          className="font-medium text-primary underline underline-offset-4"
+        >
+          Register here
+        </Link>
+      </p>
+    </section>
   );
 }

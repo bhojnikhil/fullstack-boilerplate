@@ -1,6 +1,6 @@
 # Full-Stack Boilerplate
 
-A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 15** frontend
+A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 16** frontend
 (`apps/web`). It uses uv for Python and pnpm workspaces + Turborepo for JavaScript, runs
 locally with Docker Compose, and is tested in GitHub Actions.
 
@@ -55,13 +55,16 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   ([ADR 0001](docs/adr/0001-python-tooling-uv.md)).
 
 **Frontend (`apps/web`)**
-- Next.js 15 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
+- Next.js 16 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
   config in `packages/config`.
-- Pages: `/`, `/auth/login`, `/auth/register`, `/items`.
+- Public pages at `/`, `/privacy`, `/terms`, and `/account-deletion`. Sign-in, registration
+  and sample items at `/auth/login`, `/auth/register`, and `/items`.
+- Tailwind CSS 4 and shadcn/ui button, input and label components. The site theme follows
+  the operating system by default and remembers an explicit light or dark selection.
+- Android App Links and Apple Universal Links association documents at `/.well-known/`.
+- Vitest with React Testing Library and a Playwright Chromium smoke suite for the public site.
 - axios API client (`lib/api.ts`) that sends the JWT from `localStorage` and redirects to
   login on 401. Zustand auth store (`lib/auth-store.ts`).
-- Plain CSS (`app/globals.css`). No component library, no Tailwind, no dark mode.
-- No Google sign-in button and no frontend tests yet.
 
 **Tooling**
 - pnpm workspaces + Turborepo for `lint`, `typecheck`, `build`, `dev`
@@ -203,11 +206,33 @@ image. Unknown revisions are treated as newer; the API logs their IDs once per d
 set per process. During a rolling
 release, keep migrations compatible with instances of the previous release. See [ADR 0004](docs/adr/0004-async-postgres.md).
 
-**Web** (`apps/web/.env.local`):
+**Web** ([`.env.example`](apps/web/.env.example))
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
+| `WEB_LEGAL_APP_NAME` | `[App name]` placeholder | Name shown in the privacy and terms templates. |
+| `WEB_LEGAL_DOMAIN` | `[Site domain]` placeholder | Domain shown in the privacy and terms templates. |
+| `WEB_SUPPORT_EMAIL` | Unset | Monitored mailbox for deletion requests sent from `/account-deletion`. |
+| `ANDROID_PACKAGE_NAME` | Unset | Android application ID, for example `com.example.app`. |
+| `ANDROID_SHA256_CERT_FINGERPRINTS` | Unset | Comma-separated, colon-delimited SHA-256 signing certificate fingerprints. Include the Play App Signing certificate for Play builds. |
+| `IOS_TEAM_ID` | Unset | 10-character Apple Developer Team ID. |
+| `IOS_BUNDLE_ID` | Unset | iOS bundle identifier, for example `com.example.app`. |
+
+Use `apps/web/.env.local` for host development. The legal, support and association
+settings are read at **runtime**. Supply them through the container's environment when
+running the standalone image, for example with `docker run -e WEB_SUPPORT_EMAIL=support@example.com …`.
+
+### Public pages and mobile links
+
+- `scripts/customize.sh PROJECT_NAME "App Name" DOMAIN` fills the legal app and domain
+  values in the web env example. It copies that example to `apps/web/.env.local` when the
+  local file is absent. Complete the remaining fields in the privacy and terms pages
+  and set `WEB_SUPPORT_EMAIL` to a monitored mailbox before publishing.
+- The Android and Apple association URLs each return `application/json` from the
+  slashless path and return 404 until their corresponding settings are valid. iOS links
+  are scoped to `/app/*`. Match that scope to the paths the mobile app handles before
+  shipping. Verify both URLs return 200 over HTTPS without redirects on the public domain.
 
 ## Common commands
 
@@ -250,6 +275,20 @@ Validation errors list invalid field locations and error types. The API accepts 
 short ASCII `X-Request-Id` tracing token or generates one, and returns it on responses.
 
 ## Testing
+
+Run the web checks from the repository root. Playwright starts a Next.js development
+server on port 3308 and supplies test values for the support mailbox and mobile
+association files.
+
+```bash
+pnpm --filter web test
+pnpm --filter web exec playwright install chromium
+pnpm --filter web test:e2e
+```
+
+On Linux, use `playwright install --with-deps chromium` to install the system libraries
+as well. The browser suite exercises navigation, theme persistence and the association
+URLs. The Docker smoke job checks the packaged standalone server separately.
 
 `make test` creates and uses the dedicated `boilerplate_test` database on Compose
 Postgres. To use another dedicated Postgres database, run
