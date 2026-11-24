@@ -1,4 +1,5 @@
 """Pytest configuration and shared fixtures."""
+
 from collections.abc import Generator
 
 import pytest
@@ -34,9 +35,7 @@ def test_db_engine():
 @pytest.fixture
 def test_db(test_db_engine) -> Generator[Session]:
     """Create test database session."""
-    testing_session_local = sessionmaker(
-        autocommit=False, autoflush=False, bind=test_db_engine
-    )
+    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=test_db_engine)
 
     connection = test_db_engine.connect()
     transaction = connection.begin()

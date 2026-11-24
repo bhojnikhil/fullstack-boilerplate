@@ -1,4 +1,5 @@
 """Tests for health router."""
+
 from fastapi.testclient import TestClient
 
 

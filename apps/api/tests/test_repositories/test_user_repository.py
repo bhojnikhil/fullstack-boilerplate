@@ -1,4 +1,5 @@
 """Tests for UserRepository."""
+
 import pytest
 from sqlalchemy.orm import Session
 

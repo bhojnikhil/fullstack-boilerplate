@@ -46,9 +46,7 @@ class ItemService:
             description=data.description,
         )
 
-    def update_item(
-        self, item_id: uuid.UUID, user_id: uuid.UUID, data: ItemUpdate
-    ) -> Item:
+    def update_item(self, item_id: uuid.UUID, user_id: uuid.UUID, data: ItemUpdate) -> Item:
         """Update an item, with authorization check."""
         item = self.get_item(item_id, user_id)  # Validates ownership
         return self._repository.update(

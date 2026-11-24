@@ -1,4 +1,5 @@
 """Tests for AuthService."""
+
 import pytest
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
