@@ -1,283 +1,205 @@
 # Full-Stack Boilerplate
 
-Production-ready monorepo template with **FastAPI** + **Next.js** 16, built for rapid development.
+A starter monorepo with a **FastAPI** backend (`api/`) and a **Next.js 15** frontend
+(`client/`), run locally with Docker Compose and tested in GitHub Actions.
 
-## Features
+> [!WARNING]
+> **Not production-ready yet.** This is the v1 baseline. A v2 upgrade (auth redesign,
+> multi-tenancy, mobile app, real deploys) is in progress as a series of PRs. Known issues
+> in the current code that you should not ship:
+>
+> - Google OAuth: the `state` parameter is never verified (login CSRF), the JWT is put in
+>   the redirect URL, and the frontend has no `/auth/callback` page, so Google sign-in
+>   ends on a 404.
+> - A Google identity is auto-linked to any existing account with the same email, and
+>   registration does not verify email (pre-account-takeover risk).
+> - `SECRET_KEY` falls back to a public default when unset.
+> - Access tokens are 7-day JWTs with no refresh tokens, revocation, or rate limiting.
+> - Google access/refresh tokens are requested (`access_type=offline`) and stored in
+>   plaintext.
+> - Tables are created with `create_all()` at API startup; there are no Alembic
+>   migrations yet.
+> - Each repository method commits on its own (no request-level transactions), and
+>   services raise `HTTPException` directly.
 
-✅ **Backend**
-- FastAPI with 3-layer architecture (Router → Service → Repository)
-- PostgreSQL with SQLAlchemy ORM and Alembic migrations
-- JWT authentication + Google OAuth integration
-- Type-safe with Python 3.13+ and mypy strict mode
+## What's included
 
-✅ **Frontend**
-- Next.js 16 with App Router and React 19
-- TypeScript with strict mode
-- shadcn/ui component library (20+ components)
-- Dark/light mode theme system
-- Responsive design (mobile-first)
+**Backend (`api/`)**
+- Python 3.13, FastAPI, SQLAlchemy 2.0 (sync) with `psycopg2`, PostgreSQL 16.
+- Router → Service → Repository layering (`app/routers`, `app/services`, `app/repositories`).
+- Email/password auth: bcrypt password hashing, HS256 JWT access tokens (python-jose),
+  `GET/PATCH /auth/me`.
+- Google OAuth 2.0 server-side redirect flow (`/auth/google/login`, `/auth/google/callback`),
+  backend only, with the issues listed above.
+- Example `items` CRUD, scoped to the signed-in user (`GET/POST /items`,
+  `GET/PATCH/DELETE /items/{id}`).
+- `GET /health` liveness endpoint (no database check).
+- Alembic is configured (`api/alembic/`), but `versions/` is empty. The schema currently
+  comes from `Base.metadata.create_all()` at startup.
+- Poetry for dependency management (`api/pyproject.toml`, `api/poetry.lock`).
 
-✅ **DevOps**
-- Docker with multi-stage production builds
-- Development mode with hot reload
-- Caddy reverse proxy with automatic HTTPS
-- Full CI/CD with GitHub Actions
-- Pre-commit hooks (ruff, mypy, ESLint, Prettier)
+**Frontend (`client/`)**
+- Next.js 15 (App Router), React 19, TypeScript (`strict: true`).
+- Pages: `/`, `/auth/login`, `/auth/register`, `/items`.
+- axios API client (`lib/api.ts`) that sends the JWT from `localStorage` and redirects to
+  login on 401. Zustand auth store (`lib/auth-store.ts`).
+- Plain CSS (`app/globals.css`). No component library, no Tailwind, no dark mode.
+- No Google sign-in button and no frontend tests yet.
 
-✅ **Testing**
-- Backend: pytest with 80% coverage requirement
-- Frontend: Vitest with React Testing Library
-- Example tests included
+**Tooling**
+- `docker-compose.yml`: `postgres`, `api` (hot reload, source mounted), `client`.
+- The API image has a `HEALTHCHECK` (`api/healthcheck.py`, stdlib-only).
+- `Makefile` wrapping Docker Compose (run `make help`).
+- GitHub Actions (`.github/workflows/test.yml`):
+  - backend: ruff, mypy (not strict mode), pytest with a coverage report (no threshold);
+  - frontend: `next lint`, `tsc --noEmit`, `next build`;
+  - `scripts/test-customize.sh`;
+  - Docker images build, and the API container must report healthy.
+- `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
+- `.pre-commit-config.yaml` is included but not run in CI.
 
-## Quick Start
+## Quick start (Docker)
 
-### Prerequisites
-- Docker & Docker Compose
-- Make
-- Git
-
-### 5-Minute Setup
+Prerequisites: Docker with Compose v2 (`docker compose`), Make, Git, OpenSSL.
 
 ```bash
-# Clone and customize
-git clone https://github.com/you/fullstack-boilerplate myapp
+git clone https://github.com/bhojnikhil/fullstack-boilerplate myapp
 cd myapp
-./scripts/customize.sh myapp "My App" mydomain.com
 
-# Configure environment
-cp api/.env.example api/.env
-cp client/.env.local.example client/.env.local
-# Edit .env files with your values (especially GOOGLE_CLIENT_ID, etc.)
+# Fill in the template placeholders (project name, display name, domain) and
+# create api/.env (with a generated SECRET_KEY) and client/.env.local.
+./scripts/customize.sh myapp "My App" myapp.com
 
-# Start development environment
 make up
-
-# Create first user
-# Visit http://localhost:3000/login
-# Click "Sign Up" tab
-# Enter email, password, name
-
-# Done! Your app is running at http://localhost:3000
 ```
 
-## Tech Stack
+Then open:
 
-**Backend:**
-- Python 3.13+
-- FastAPI 0.115+
-- PostgreSQL 16
-- SQLAlchemy 2.0
-- Alembic
-- Poetry (dependency management)
+- Frontend: http://localhost:3000. Create a user at `/auth/register`.
+- API docs (Swagger UI): http://localhost:8000/docs (ReDoc: `/redoc`)
 
-**Frontend:**
-- Next.js 16
-- React 19.2
-- TypeScript 5
-- Tailwind CSS 4
-- shadcn/ui
-- Vitest
+Docker Compose sets the API's environment in `docker-compose.yml` and does **not** read
+`api/.env`. That file is for running the API directly on your machine (below).
 
-**DevOps:**
-- Docker & Docker Compose
-- Caddy (reverse proxy)
-- GitHub Actions (CI/CD)
-- Pre-commit hooks
+Ports 5432, 8000 and 3000 must be free.
 
-## Architecture
+## Running without Docker
 
-### Backend Structure
+```bash
+# Postgres: any local PostgreSQL 16 with a database named `boilerplate`, or:
+docker compose up -d postgres
+
+# API
+cd api
+poetry install
+cp .env.example .env            # skip if customize.sh already created it
+poetry run uvicorn app.main:app --reload
+
+# Frontend (separate terminal)
+cd client
+npm ci
+cp .env.example .env.local      # skip if customize.sh already created it
+npm run dev
+```
+
+## Environment variables
+
+**API** (`api/app/core/config.py`, read from the environment or `api/.env`):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/boilerplate` | SQLAlchemy URL (psycopg2) |
+| `SECRET_KEY` | `dev-secret-key-change-in-production` | JWT signing key. **Always set it.** The default is public. |
+| `JWT_ALGORITHM` | `HS256` | |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` (7 days) | |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Google OAuth is disabled when unset |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:8000/auth/google/callback` | |
+| `FRONTEND_URL` | `http://localhost:3000` | Target of the OAuth redirect |
+| `DEBUG` | `false` | |
+
+CORS origins are hardcoded in `api/app/main.py` (`http://localhost:3000`,
+`http://localhost`, `http://api:8000`).
+
+**Frontend** (`client/.env.local`):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. |
+
+## Common commands
+
+```bash
+make help            # list all targets
+make up / make down  # start / stop the stack
+make ps              # service status, including the api health status
+make logs            # follow logs
+make test            # backend tests in the api container
+make test-coverage   # backend tests with an HTML coverage report (api/htmlcov)
+make lint            # ruff (in the api container) + next lint (on the host)
+make typecheck       # mypy (in the api container) + tsc (on the host)
+make format          # ruff format + prettier
+make migrate         # alembic upgrade head (no migrations exist yet)
+make migration NAME='add_column'
+make db-shell        # psql into the dev database
+make fresh           # wipe the DB volume, rebuild, start
+```
+
+Frontend targets run on the host and need `npm ci` in `client/` first.
+
+## Project structure
+
 ```
 api/
 ├── app/
-│   ├── core/          # Database, config, dependencies
-│   ├── models/        # SQLAlchemy models
-│   ├── schemas/       # Pydantic request/response
-│   ├── repositories/  # Data access layer
-│   ├── services/      # Business logic
-│   ├── routers/       # API endpoints
-│   └── auth/          # Authentication
-├── alembic/           # Database migrations
-└── tests/             # Test suite
-```
-
-### Frontend Structure
-```
+│   ├── main.py          # FastAPI app, CORS, routers, create_all() at startup
+│   ├── auth/            # password hashing, JWT, current-user dependencies
+│   ├── core/            # settings (config.py), engine/session (db.py)
+│   ├── models/          # User, OAuthAccount, Item
+│   ├── schemas/         # Pydantic request/response models
+│   ├── repositories/    # data access
+│   ├── services/        # AuthService, OAuthService, ItemService
+│   └── routers/         # /health, /auth, /items
+├── alembic/             # migration environment (no versions yet)
+├── tests/               # pytest (in-memory SQLite)
+├── healthcheck.py       # container HEALTHCHECK probe
+└── Dockerfile
 client/
-├── app/               # Next.js App Router pages
-├── components/        # React components
-├── lib/               # Utilities, API client
-├── hooks/             # Custom React hooks
-└── __tests__/         # Test suite
+├── app/                 # App Router pages: /, /auth/login, /auth/register, /items
+└── lib/                 # api.ts (axios), auth-store.ts (zustand)
+scripts/
+├── customize.sh         # placeholder replacement + local .env creation
+└── test-customize.sh    # regression test for customize.sh
 ```
-
-## Key Concepts
-
-### Backend: 3-Layer Architecture
-
-**Router** → Handles HTTP requests
-**Service** → Contains business logic
-**Repository** → Manages database access
-
-This separation ensures:
-- Testability (mock repositories for unit tests)
-- Maintainability (clear responsibilities)
-- Reusability (services can be called from multiple routers)
-
-### Frontend: API-Driven
-
-All API calls go through `lib/api.ts` which:
-- Automatically injects JWT tokens
-- Provides type-safe API methods
-- Handles error responses
-- Supports offline fallbacks
-
-### Authentication
-
-1. **Email/Password:**
-   - User registers with email, password, name
-   - Password hashed with bcrypt
-   - JWT token returned and stored
-
-2. **Google OAuth:**
-   - User clicks "Sign in with Google"
-   - Redirects to Google login
-   - OAuth callback creates/links user
-   - JWT token returned
-
-## Development
-
-### Common Commands
-
-```bash
-# Start dev environment
-make up
-
-# View logs
-make logs
-
-# Run migrations
-make migrate
-
-# Create new migration
-make migration NAME='add_column'
-
-# Run tests
-make test
-
-# Run tests with coverage
-make test-coverage
-
-# Format code
-make format
-
-# Lint code
-make lint
-
-# Reset database
-make fresh
-```
-
-### Project Structure
-
-The boilerplate includes a simple **Item** entity as a CRUD example. You can:
-- View the pattern in `api/app/models/item.py`
-- Follow the same pattern for your domain entities
-- Replace "Item" with your entity name throughout the project
-
-## Documentation
-
-- **[SETUP.md](./SETUP.md)** - Detailed setup and configuration
-- **[CUSTOMIZATION.md](./CUSTOMIZATION.md)** - How to customize the boilerplate
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Technical architecture details
-- **[DEPLOYMENT.md](./DEPLOYMENT.md)** - Deployment instructions
-
-## API Documentation
-
-Once running, visit:
-- API Docs: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
 
 ## Testing
 
-### Backend Tests
 ```bash
-# Run all tests
+# In Docker (stack running):
 make test
 
-# Run specific test file
-docker-compose exec api-dev pytest tests/test_routers/test_items.py -v
-
-# Run with coverage
-make test-coverage
+# Or locally:
+cd api && poetry run pytest
 ```
 
-### Frontend Tests
-```bash
-cd client
-npm test -- --watch
-```
+Backend tests use an in-memory SQLite database through a dependency override. The app's
+startup hook still runs `create_all()` against `DATABASE_URL`, so a reachable Postgres is
+required (CI provides one). There are no frontend tests yet.
 
-## Deployment
+## Adding a domain entity
 
-The boilerplate is ready for production deployment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for:
-- Docker Compose on VPS (DigitalOcean, Linode, etc.)
-- Vercel (frontend) + Railway (backend)
-- Environment configuration
-- SSL/HTTPS setup
+Use `items` as the template: model (`app/models`) → schema (`app/schemas`) → repository
+→ service → router, then register the router in `app/main.py` and add tests under
+`api/tests/`. `CLAUDE_CONTEXT.md` has a longer walkthrough.
 
-## Example Customization
+## Troubleshooting
 
-To adapt this boilerplate for a "Todo App":
-
-1. **Rename Item entity:**
-   - `api/app/models/item.py` → `todo.py`
-   - Replace class `Item` with `Todo`
-   - Update FK/relationships
-
-2. **Update endpoints:**
-   - `api/app/routers/items.py` → `todos.py`
-   - Update route paths to `/todos`
-
-3. **Update frontend:**
-   - Rename pages: `items/` → `todos/`
-   - Update API client calls
-   - Update component names
-
-See [CUSTOMIZATION.md](./CUSTOMIZATION.md) for detailed guide.
-
-## Contributing
-
-1. Create feature branch: `git checkout -b feature/my-feature`
-2. Write tests for new features
-3. Run pre-commit hooks: `pre-commit run --all-files`
-4. Ensure CI passes
-5. Submit pull request
-
-Pre-commit hooks automatically:
-- Format code (ruff, prettier)
-- Check types (mypy)
-- Lint code (ruff, eslint)
-- Validate YAML/JSON
+**`Illegal instruction` (exit code 132) when building or running the API image on an Apple
+M4 Mac.** We have seen OpenSSL, as loaded by the Python `cryptography` package, crash
+inside Linux containers on an M4 Pro (Docker Desktop, engine 27.5). Setting
+`OPENSSL_armcap=0` in the container environment avoids it (verified). The Dockerfile
+already keeps Poetry from loading `cryptography` during the build. Updating Docker
+Desktop may also fix it; we have not verified that.
 
 ## License
 
-MIT - See [LICENSE](./LICENSE)
-
-## Support
-
-For issues and questions:
-- Read [SETUP.md](./SETUP.md) for setup help
-- Check [ARCHITECTURE.md](./ARCHITECTURE.md) for design patterns
-- Review existing examples in the codebase
-
-## Next Steps
-
-1. ✅ Clone this repository
-2. ✅ Run `./scripts/customize.sh` to personalize
-3. ✅ Configure environment variables
-4. ✅ Run `make up` to start
-5. ✅ Visit http://localhost:3000
-6. ✅ Start building your features!
-
-Happy building! 🚀
+MIT. See [LICENSE](./LICENSE).
