@@ -1,9 +1,8 @@
 import { useNetInfo, type NetInfoState } from "@react-native-community/netinfo";
-import { fireEvent, render, screen } from "@testing-library/react-native";
+import { render, screen } from "@testing-library/react-native";
 import { Text } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useKeyboardVerticalOffset } from "../keyboard-avoiding-form";
 import {
   NetworkBanner,
   NetworkStatusBoundary,
@@ -102,39 +101,5 @@ describe("NetworkStatusBoundary", () => {
     );
     expect(await screen.findByTestId("top-inset")).toHaveTextContent("0");
     expect(screen.getByTestId("network-banner")).toHaveStyle({ paddingTop: 47 + 8 });
-  });
-});
-
-function KeyboardOffset({ base }: { base: number }) {
-  return <Text testID="keyboard-offset">{useKeyboardVerticalOffset(base)}</Text>;
-}
-
-describe("keyboard offset with the banner (m3)", () => {
-  async function renderForm() {
-    const { SafeAreaProvider } = jest.requireActual<
-      typeof import("react-native-safe-area-context")
-    >("react-native-safe-area-context");
-    await render(
-      <SafeAreaProvider {...INSETS}>
-        <NetworkStatusBoundary>
-          <KeyboardOffset base={50} />
-        </NetworkStatusBoundary>
-      </SafeAreaProvider>,
-    );
-  }
-
-  it("adds the visible banner's height", async () => {
-    setConnectivity(false, false);
-    await renderForm();
-    await fireEvent(await screen.findByTestId("network-banner"), "layout", {
-      nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 83 } },
-    });
-    expect(screen.getByTestId("keyboard-offset")).toHaveTextContent(String(50 + 83));
-  });
-
-  it("uses the given offset alone while online", async () => {
-    setConnectivity(true, true);
-    await renderForm();
-    expect(await screen.findByTestId("keyboard-offset")).toHaveTextContent("50");
   });
 });

@@ -1,5 +1,4 @@
 import { Link, router } from "expo-router";
-import { useHeaderHeight } from "expo-router/react-navigation";
 import { useState } from "react";
 import { Text } from "react-native";
 
@@ -12,13 +11,12 @@ import { useTheme } from "@/theme/use-theme";
 /** Placeholder: the form is not wired to the API until phase 9b. */
 export default function SignIn() {
   const { colors, typography } = useTheme();
-  const headerHeight = useHeaderHeight();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   return (
     <Screen edges={["bottom", "left", "right"]}>
-      <KeyboardAvoidingForm keyboardVerticalOffset={headerHeight}>
+      <KeyboardAvoidingForm>
         <Text
           accessibilityRole="header"
           style={[typography.title, { color: colors.text }]}
