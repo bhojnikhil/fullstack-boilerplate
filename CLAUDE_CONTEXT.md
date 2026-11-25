@@ -1,6 +1,6 @@
 # {{APP_NAME}} Full-Stack Boilerplate Context
 
-The [README](README.md) lists the current auth limitations and local setup commands.
+The [README](README.md) describes the auth model, current limitations and local setup.
 The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 16,
 React 19, Tailwind CSS 4, shadcn/ui, axios and Zustand.
 
@@ -8,9 +8,11 @@ React 19, Tailwind CSS 4, shadcn/ui, axios and Zustand.
 
 ```
 apps/api/
-  app/main.py            FastAPI app and router registration
-  app/core/              settings, request session, error handlers, middleware and health
-  app/modules/auth/      users, Google accounts, password login and profile
+  app/main.py            FastAPI app, router registration, app-wide services (app.state)
+  app/core/              settings, request session, errors, middleware, health, security
+                         primitives, rate limiter, audit log, client info
+  app/integrations/      email (backends + templates), Google ID tokens, Pwned Passwords
+  app/modules/auth/      accounts, sessions, tokens, Google sign-in, /v1/auth and /v1/me
   app/modules/items/     user-scoped CRUD example
   alembic/               database migrations
   tests/                 pytest integration and unit tests
@@ -49,13 +51,37 @@ scripts/                 template customization and container checks
    serialization and before FastAPI sends a success response.
 7. Add tests in `apps/api/tests`. Use the real Postgres fixtures for DB functionality and
    `httpx.AsyncClient` for HTTP assertions. The items module demonstrates keyset pagination
-   and idempotent mutation responses.
+   and idempotent mutation responses. `tests/conftest.py` has `sign_in`/`bearer` helpers
+   that create real sessions, plus `outbox` (sent emails) and `google` (fake verifier).
+
+Conventions added with the auth redesign:
+
+- A `DomainError(..., commit=True)` commits the request's writes before the error response.
+  Use it only when the service wrote exactly the side effects that must survive (an audit
+  event, a revoked session). Other errors roll back.
+- Rate-limit counters (`app.core.ratelimit`) use their own short transactions so they
+  survive the request's rollback. Add rules next to the module that uses them.
+- Record security-relevant events with `app.core.audit.record_event`. Never put tokens,
+  passwords, email addresses or IPs in `details`; use `keyed_digest` when correlation helps.
+- Send email with the request-scoped `Mailer` (`app.integrations.email.Mail`). It sends after
+  the response, which only happens after a successful commit.
+- Store opaque tokens as `token_digest` (SHA-256); compare secrets with
+  `constant_time_equals`. Expiry times are computed and compared with the application
+  clock, not the database's `now()`.
+- Modules that own user data register an `AccountDeletionHook` in `create_app`
+  (`app.state.account_deletion_hooks`) to block or clean up before `DELETE /v1/me`.
 
 ## Runtime contracts
 
-- `/v1/auth` serves register, login, profile and the legacy Google redirect flow.
-  The web pages are at `/auth/login` and `/auth/register`. The web uses bearer access tokens
-  from localStorage.
+- `/v1/auth` serves registration, password and Google sign-in, refresh, logout, email
+  verification, password reset, re-authentication, Google link/unlink and session
+  management; `/v1/me` serves the profile, password and email changes and account deletion.
+  Access tokens last 15 minutes and are checked against an active session on every request.
+  Refresh tokens rotate on every use; reuse revokes the session. `X-Platform: web` clients
+  get the refresh token as an httpOnly cookie on `/v1/auth/refresh` (CSRF: `Origin` allowlist
+  plus `X-CSRF-Token`); other clients get it in the body. See ADRs 0008 to 0010.
+- The web pages are at `/auth/login` and `/auth/register`. The web keeps the access token in
+  memory and refreshes it with the cookie.
 - `/v1/items` uses the signed-in user's ID and sorts by creation time and UUID. The list response
   includes `items` and `next_cursor`.
 - Signed-in item mutations and profile updates can take an `Idempotency-Key`. The key
@@ -67,13 +93,14 @@ scripts/                 template customization and container checks
   out of exception logs. Development uses console logs with redacted tracebacks;
   the API and Alembic use JSON logs outside development.
 - The API defaults to `ENV=production` and requires an explicit signing key and database URL
-  in test, staging and production. Compose development sets `ENV=development` and publishes
-  the API and Postgres only on IPv4 loopback.
+  in test, staging and production; staging and production also require `JWT_SECRET_KEY`,
+  SMTP email, Postgres rate limiting and an `https` `WEB_URL`. Compose development sets
+  `ENV=development`, sends email to Mailpit and publishes every port only on IPv4 loopback.
 - The container probes `/health` for liveness. Both probes bypass the host allowlist.
   `/ready` rejects an unreachable, unmigrated or behind database. An unknown revision is
-  accepted with a warning that names the unknown IDs once per set per process to support
-  rolling deploys. Run Alembic using the direct
-  connection when the application uses a pooler.
+  accepted with a warning that names the unknown IDs once per set per process. Migration
+  0003 requires a coordinated cutover: stop old API instances before migrating. Run
+  Alembic using the direct connection when the application uses a pooler.
 
 ## Mobile app (apps/mobile)
 
@@ -102,12 +129,13 @@ README.md "Mobile" has the run/build instructions and env vars. Conventions:
 ```bash
 ./scripts/customize.sh myapp "My App" myapp.com
 make setup                        # locked uv and pnpm installs
-make up                           # Compose Postgres, explicit migrations, API and web
+make up                           # Compose Postgres, explicit migrations, API, web, Mailpit
 make dev                          # Compose Postgres + API, Next.js dev server on host
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
 make build-web                    # production Next.js build
-make smoke                        # packaged API and web, migrations and production probes
+make smoke                        # packaged API and web in production mode: probes, sign-up
+                                  # email over SMTP, refresh cookie, association files
 pnpm --filter web test            # Vitest and React Testing Library
 pnpm --filter web test:e2e        # public web smoke with Playwright Chromium
 make mobile                       # Expo dev server for apps/mobile

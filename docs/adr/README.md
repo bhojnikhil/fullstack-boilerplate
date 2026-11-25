@@ -12,3 +12,6 @@ Add a new numbered file when a decision changes; don't rewrite history.
 | [0005](0005-web-foundation.md) | Web foundation and mobile association documents | Accepted |
 | [0006](0006-mobile-styling.md) | Mobile styling: StyleSheet + typed design tokens | Accepted |
 | [0007](0007-mobile-toolchain-versions.md) | Mobile toolchain versions: TypeScript 6, ESLint 9, pinned eas-cli | Accepted |
+| [0008](0008-auth-tokens-and-sessions.md) | Auth tokens, sessions and web/mobile token transport | Accepted |
+| [0009](0009-google-id-token-sign-in.md) | Sign in with Google by ID token, and account linking | Accepted |
+| [0010](0010-rate-limits-email-audit.md) | Rate limits, transactional email, audit log and enumeration resistance | Accepted |

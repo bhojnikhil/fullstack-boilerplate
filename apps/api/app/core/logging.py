@@ -14,18 +14,32 @@ from app.core.config import Environment
 exception_dicts = ExceptionDictTransformer(show_locals=False)
 
 
-def redact_tracebacks(stacks: list[dict[str, Any]]) -> None:
-    for stack in stacks:
-        # Messages, notes and syntax error snippets can contain request data or SQL.
-        del stack["exc_value"], stack["exc_notes"], stack["syntax_error"]
-        for nested in stack["exceptions"]:
-            redact_tracebacks(nested)
+FRAME_FIELDS = ("filename", "lineno", "name")
+
+
+def redact_tracebacks(stacks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild each stack from allowlisted fields only.
+
+    Messages, notes, syntax-error snippets and locals can contain request data or SQL,
+    and so could fields a future structlog release adds, so nothing else is copied.
+    """
+    return [
+        {
+            "exc_type": stack.get("exc_type"),
+            "is_cause": stack.get("is_cause"),
+            "is_group": stack.get("is_group"),
+            "frames": [
+                {field: frame.get(field) for field in FRAME_FIELDS}
+                for frame in stack.get("frames", [])
+            ],
+            "exceptions": [redact_tracebacks(nested) for nested in stack.get("exceptions", [])],
+        }
+        for stack in stacks
+    ]
 
 
 def safe_tracebacks(exc_info: ExcInfo) -> list[dict[str, Any]]:
-    stacks = exception_dicts(exc_info)
-    redact_tracebacks(stacks)
-    return stacks
+    return redact_tracebacks(exception_dicts(exc_info))
 
 
 def render_console_traceback(stream: TextIO, exc_info: ExcInfo) -> None:

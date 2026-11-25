@@ -1,0 +1,3 @@
+Hello $name,
+
+A change to your $app_name email address was requested. If you did not request this, secure your account and reset your password.

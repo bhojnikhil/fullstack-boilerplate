@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 
 export default function ItemsPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, restoreSession } = useAuthStore();
   const [items, setItems] = useState<Item[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -38,14 +38,21 @@ export default function ItemsPage() {
 
   useEffect(() => {
     if (!user) {
-      router.push("/auth/login");
+      // The access token is kept in memory only; after a reload, try the refresh cookie.
+      void restoreSession()
+        .then((restored) => {
+          if (!restored) router.push("/auth/login");
+        })
+        .catch(() => {
+          setError("Could not restore your session. Reload to try again.");
+        });
       return;
     }
 
     // The existing loader sets its loading state before each request.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadItems();
-  }, [user, router]);
+  }, [user, router, restoreSession]);
 
   const handleCreateItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,7 +86,7 @@ export default function ItemsPage() {
   };
 
   if (!user) {
-    return null;
+    return error ? <p role="alert">{error}</p> : null;
   }
 
   return (
@@ -90,9 +97,14 @@ export default function ItemsPage() {
           <span>Welcome, {user.name}</span>
           <Button
             variant="secondary"
-            onClick={() => {
-              useAuthStore.getState().logout();
-              router.push("/");
+            onClick={async () => {
+              try {
+                await useAuthStore.getState().logout();
+                router.push("/");
+              } catch {
+                setError("Could not sign out. Please try again.");
+                setFailureCount((count) => count + 1);
+              }
             }}
           >
             Logout

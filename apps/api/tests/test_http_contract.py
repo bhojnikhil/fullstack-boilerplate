@@ -21,10 +21,11 @@ from app.core.db import RequestSession
 from app.core.logging import configure_logging
 from app.core.middleware import TrustedHostEnvelopeMiddleware
 from app.core.security import create_access_token
-from app.main import create_app
+from app.factory import create_app
+from app.modules.auth.models import User
 from app.modules.items.models import Item
 from app.modules.items.repository import ItemRepository
-from tests.conftest import migration_config
+from tests.conftest import bearer, migration_config, sign_in
 
 
 def assert_error(response, status, code):
@@ -46,8 +47,14 @@ def assert_error(response, status, code):
         ("GET", "/missing", None, 404, "not_found"),
         ("PUT", "/v1/items", {}, 405, "method_not_allowed"),
         ("POST", "/v1/auth/register", {"password": "private-value"}, 422, "validation_error"),
-        ("GET", "/v1/auth/me", None, 401, "unauthorized"),
-        ("GET", "/v1/auth/google/login", None, 503, "oauth_unavailable"),
+        ("GET", "/v1/me", None, 401, "unauthorized"),
+        (
+            "POST",
+            "/v1/auth/verify-email",
+            {"token": "x" * 43, "password": "private-value"},
+            400,
+            "invalid_or_expired_token",
+        ),
     ],
 )
 async def test_framework_and_domain_envelopes(client, method, url, body, status, code):
@@ -70,7 +77,7 @@ async def test_framework_and_domain_envelopes(client, method, url, body, status,
             {"email": "test@example.com", "password": "password", "name": "Test"},
         ),
         ("POST", "/v1/auth/login", {"email": "test@example.com", "password": "testpassword123"}),
-        ("PATCH", "/v1/auth/me", {"name": "Test"}),
+        ("PATCH", "/v1/me", {"name": "Test"}),
         ("POST", "/v1/items", {"title": "Title"}),
         ("PATCH", f"/v1/items/{uuid4()}", {"title": "Title"}),
     ],
@@ -84,19 +91,22 @@ async def test_unknown_input_fields(client, auth_headers, method, path, payload)
     assert "private-value" not in response.text
 
 
-async def test_bad_jwt_and_inactive_user(client, auth_headers, config, test_user, session_factory):
+async def test_bad_jwt_and_inactive_user(
+    client, auth_headers, config, test_user, test_session, session_factory
+):
     for token in (
         "invalid",
-        create_access_token({"sub": str(uuid4())}, config),
-        create_access_token({"email": "example@example.com"}, config),
+        # Unknown session, and a real session presented for another user.
+        create_access_token(test_user.id, uuid4(), config)[0],
+        create_access_token(uuid4(), test_session.session.id, config)[0],
     ):
-        response = await client.get("/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
-        assert_error(response, 401, "invalid_credentials")
+        response = await client.get("/v1/me", headers={"Authorization": f"Bearer {token}"})
+        assert_error(response, 401, "invalid_token")
         assert response.headers["www-authenticate"] == "Bearer"
     async with session_factory.begin() as session:
         user = await session.merge(test_user)
         user.is_active = False
-    assert_error(await client.get("/v1/auth/me", headers=auth_headers), 403, "inactive_user")
+    assert_error(await client.get("/v1/me", headers=auth_headers), 403, "inactive_user")
 
 
 async def test_middleware_logs_template_and_user_without_request_data(
@@ -402,8 +412,9 @@ async def test_adopt_legacy_schema_without_losing_data(config, empty_db_engine):
         await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
         await connection.run_sync(lambda conn: command.check(migration_config(conn)))
 
-    app = create_app(config, async_sessionmaker(empty_db_engine, expire_on_commit=False))
-    headers = {"Authorization": f"Bearer {create_access_token({'sub': str(user_id)}, config)}"}
+    sessions = async_sessionmaker(empty_db_engine, expire_on_commit=False)
+    app = create_app(config, sessions)
+    headers = bearer(await sign_in(sessions, config, User(id=user_id)))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
         assert (await client.get("/ready")).status_code == 200
         restored = await client.get(f"/v1/items/{item_id}", headers=headers)

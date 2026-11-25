@@ -1,0 +1,5 @@
+Hi $name,
+
+Your $app_name account has been deleted and you have been signed out on all devices.
+
+If you did not ask for this, contact support right away.
