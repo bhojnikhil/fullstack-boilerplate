@@ -1,0 +1,45 @@
+# 0008 Rate limits, transactional email, audit log and enumeration resistance
+
+**Status** Accepted
+
+**Rate limiting** needs shared state across API instances without adding Redis. A
+`RateLimitBackend` has three operations on fixed windows: `hit`, `peek` and `reset`.
+The default Postgres backend does one atomic upsert per hit on `rate_limits`, using the
+database clock for windows and for `Retry-After`. It runs in its own short transaction,
+because a failed sign-in rolls the request back but must still count. An in-memory
+backend serves tests and single-process development; staging and production require
+Postgres. Keys are the rule name plus an HMAC of the identifier, so emails and IPs are
+not stored. Sign-in also has a progressive lockout per account identifier (the
+submitted email, whether or not an account exists): five failures within an hour lock
+it for 30 seconds, doubling to 15 minutes. A determined attacker can lock a victim out
+for up to 15 minutes at a time; per-IP limits slow that down. Expired rows are not purged
+yet.
+
+**Email** goes through an `EmailBackend` (`send(email)`) chosen by `EMAIL_BACKEND`:
+console in development, SMTP (stdlib `smtplib` in a worker thread, with STARTTLS or
+implicit TLS) and in-memory for tests. Mailpit captures SMTP mail in Compose. Templates
+are `string.Template` files with an HTML layout; values are escaped for HTML and a missing
+value raises. Services queue messages on a request-scoped `Mailer`, which sends them in a
+background task after the response. Responses are sent only after the transaction
+commits, so a rolled-back request sends nothing, and response times do not reveal
+whether a message was sent. The cost is that a crash or SMTP failure loses the message.
+A durable queue with retries replaces the background task in a later phase; backends keep
+the same interface. Emailed links put tokens in the URL fragment so web servers and
+`Referer` headers never see them.
+
+**Audit log.** `audit_events` rows are added to the request's unit of work, so they commit
+with the change they describe. Failures that must be recorded (failed sign-in, refresh
+token reuse) use a `DomainError` that commits. `user_id` has no foreign key, so events
+outlive a deleted account as pseudonymous records. Details hold no tokens, passwords,
+email addresses or IPs; digests stand in where correlation helps.
+
+**Enumeration resistance.** Registration answers `202` with the same body for every
+address. A new address gets a verification link, an existing unverified one gets a new
+link, and a verified one gets a notice with sign-in and reset links; the password is
+always hashed first so timing matches. Reset requests behave the same way, and sign-in
+failures share one error and do the same hashing work. Accounts are created unverified
+and may sign in before verifying, which keeps onboarding simple. The trade-off: someone
+who registers an address and signs in with the password they chose learns that the
+address had no account. Hiding that would require creating accounts only when the
+emailed link is opened. We chose the simpler flow because each probe creates an account,
+is rate limited and emails the address owner.
