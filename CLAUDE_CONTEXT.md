@@ -160,3 +160,5 @@ Check the current stable registry versions before choosing dependency versions.
 Pin exact versions and update the corresponding lockfile. Keep local env files and
 build output out of Git. Use [apps/api/.env.example](apps/api/.env.example) for the
 API settings and [apps/web/.env.example](apps/web/.env.example) for web configuration.
+
+The web API client uses `packages/api-client`. Run `make gen-client` after API contract changes; the committed OpenAPI schema and generated TypeScript types are checked for drift in CI. The shared fetch transport leaves token storage and refresh policy to its caller.

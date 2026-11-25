@@ -16,5 +16,6 @@ Add a new numbered file when a decision changes; don't rewrite history.
 | [0009](0009-google-id-token-sign-in.md) | Sign in with Google by ID token, and account linking | Accepted |
 | [0010](0010-rate-limits-email-audit.md) | Rate limits, transactional email, audit log and enumeration resistance | Accepted |
 | [0011](0011-security-checks.md) | Security scans and shared pre-commit checks | Accepted |
-| [0012](0012-postgres-job-queue.md) | Postgres job queue, worker and email delivery | Accepted |
-| [0013](0013-push-storage-version-gate-sentry.md) | Expo push, S3 presigned URLs, mobile version gate and Sentry | Accepted |
+| [0012](0012-api-client.md) | OpenAPI TypeScript client | Accepted |
+| [0013](0013-postgres-job-queue.md) | Postgres job queue, worker and email delivery | Accepted |
+| [0014](0014-push-storage-version-gate-sentry.md) | Expo push, S3 presigned URLs, mobile version gate and Sentry | Accepted |

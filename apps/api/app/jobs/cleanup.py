@@ -35,7 +35,7 @@ RULES = (
     PurgeRule("account_tokens", "expires_at < now() - interval '1 day'"),
     PurgeRule("idempotency_records", "expires_at < now()"),
     PurgeRule("rate_limits", "resets_at < now()"),
-    # Job payloads can hold personal data and one-time links (docs/adr/0012): nothing
+    # Job payloads can hold personal data and one-time links (docs/adr/0013): nothing
     # outlives the retention window, whatever its state (dead, finished periodic markers,
     # or queued and never delivered).
     PurgeRule(

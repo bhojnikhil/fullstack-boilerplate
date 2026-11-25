@@ -45,13 +45,13 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - Email through a small provider interface: console (development), SMTP, Resend, and an
   in-memory backend for tests. Compose runs [Mailpit](https://mailpit.axllent.org/) to
   view messages locally.
-- Background jobs ([ADR 0012](docs/adr/0012-postgres-job-queue.md)): a Postgres job table
+- Background jobs ([ADR 0013](docs/adr/0013-postgres-job-queue.md)): a Postgres job table
   (`FOR UPDATE SKIP LOCKED`) with retries and backoff, run by a separate worker
   (`python -m app.jobs`, the `worker` Compose service). Emails are enqueued in the
   request's transaction, so a rolled-back request sends nothing. Periodic jobs process push
   receipts (15 min) and purge expired sessions, refresh tokens, emailed tokens, idempotency
   records, rate-limit rows and old dead jobs (hourly).
-- Push ([ADR 0013](docs/adr/0013-push-storage-version-gate-sentry.md)): `POST`/`DELETE
+- Push ([ADR 0014](docs/adr/0014-push-storage-version-gate-sentry.md)): `POST`/`DELETE
   /v1/devices` register and remove Expo push tokens; jobs send through the Expo Push API
   and prune tokens that receipts report as `DeviceNotRegistered`.
 - S3-compatible storage interface (S3, R2, MinIO) with presigned upload/download URLs and
@@ -853,3 +853,7 @@ before any Corepack shim on your `PATH`.
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+### API client contract
+
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile has a Jest import smoke test; Metro bundling and application integration remain unverified.
