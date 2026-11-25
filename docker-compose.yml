@@ -3,17 +3,16 @@
 services:
   postgres:
     image: postgres:16.16-alpine
-    container_name: boilerplate-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: boilerplate
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d boilerplate"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,16 +23,14 @@ services:
     build:
       context: ./apps/api
       target: dev
-    container_name: boilerplate-api
     environment:
+      ENV: development
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
-      SECRET_KEY: test-secret-key-do-not-use-in-production-12345678
-      JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 10080
-      GOOGLE_CLIENT_ID: ""
-      GOOGLE_CLIENT_SECRET: ""
+      CORS_ORIGINS: '["http://localhost:${WEB_PORT:-3000}"]'
+      FRONTEND_URL: http://localhost:${WEB_PORT:-3000}
+      GOOGLE_REDIRECT_URI: http://localhost:${API_PORT:-8000}/v1/auth/google/callback
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,10 +49,9 @@ services:
       # args, not runtime env. The browser uses this URL, so it must be
       # host-reachable (not the in-network `http://api:8000`).
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    container_name: boilerplate-web
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${API_PORT:-8000}}
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
 

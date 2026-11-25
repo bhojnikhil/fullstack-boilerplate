@@ -2,6 +2,18 @@ import axios, { AxiosInstance } from "axios";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export interface Item {
+  id: string;
+  title: string;
+  description: string | null;
+  created_at: string;
+}
+
+interface ItemPage {
+  items: Item[];
+  next_cursor: string | null;
+}
+
 class ApiClient {
   private client: AxiosInstance;
 
@@ -27,7 +39,7 @@ class ApiClient {
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (error.response?.status === 401) {
+        if (error.response?.status === 401 && error.config?.url !== "/v1/auth/login") {
           if (typeof window !== "undefined") {
             localStorage.removeItem("token");
             window.location.href = "/auth/login";
@@ -40,36 +52,36 @@ class ApiClient {
 
   // Auth endpoints
   register(email: string, name: string, password: string) {
-    return this.client.post("/auth/register", { email, name, password });
+    return this.client.post("/v1/auth/register", { email, name, password });
   }
 
   login(email: string, password: string) {
-    return this.client.post("/auth/login", { email, password });
+    return this.client.post("/v1/auth/login", { email, password });
   }
 
   getCurrentUser() {
-    return this.client.get("/auth/me");
+    return this.client.get("/v1/auth/me");
   }
 
   // Items endpoints
-  getItems() {
-    return this.client.get("/items");
+  getItems(cursor?: string) {
+    return this.client.get<ItemPage>("/v1/items", { params: { cursor } });
   }
 
   getItem(id: string) {
-    return this.client.get(`/items/${id}`);
+    return this.client.get(`/v1/items/${id}`);
   }
 
   createItem(title: string, description: string) {
-    return this.client.post("/items", { title, description });
+    return this.client.post("/v1/items", { title, description });
   }
 
   updateItem(id: string, title: string, description: string) {
-    return this.client.patch(`/items/${id}`, { title, description });
+    return this.client.patch(`/v1/items/${id}`, { title, description });
   }
 
   deleteItem(id: string) {
-    return this.client.delete(`/items/${id}`);
+    return this.client.delete(`/v1/items/${id}`);
   }
 
   // Health check

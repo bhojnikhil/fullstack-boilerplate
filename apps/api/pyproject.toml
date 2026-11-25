@@ -18,6 +18,8 @@ dependencies = [
     "python-jose[cryptography]==3.5.0",
     "sqlalchemy==2.1.9",
     "uvicorn[standard]==0.54.0",
+    "structlog==26.1.0",
+    "greenlet==3.5.6",
 ]
 
 [dependency-groups]
@@ -52,7 +54,12 @@ addopts = [
 
 [tool.coverage.run]
 branch = true
+concurrency = ["greenlet", "thread"]
 omit = ["*/tests/*", "*/__pycache__/*", "*/site-packages/*"]
+
+[tool.coverage.report]
+fail_under = 96.0
+precision = 2
 
 # Ruff Configuration (Linting & Formatting)
 [tool.ruff]
@@ -69,17 +76,9 @@ known-first-party = ["app"]
 # MyPy Configuration (Type Checking)
 [tool.mypy]
 python_version = "3.13"
-warn_return_any = false
-warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_untyped_calls = false
-disallow_incomplete_defs = false
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
+strict = true
 
+# python-jose does not ship typing metadata.
 [[tool.mypy.overrides]]
 module = "jose.*"
 ignore_missing_imports = true
