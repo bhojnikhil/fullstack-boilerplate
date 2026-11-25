@@ -57,8 +57,8 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - S3-compatible storage interface (S3, R2, MinIO) with presigned upload/download URLs and
   type/size limits. No endpoint uses it yet.
 - `GET /v1/meta` and a `426 app_update_required` gate for mobile clients below
-  `MIN_SUPPORTED_APP_VERSION` (`X-App-Version`/`X-Platform` headers; web is never gated).
-- Sentry for the API and worker when `SENTRY_DSN` is set; no personal data is sent.
+  `MIN_SUPPORTED_APP_VERSION` (`X-App-Version`/`X-Platform` headers; a mobile client with a missing or malformed version is gated too; web never is).
+- Sentry for the API and worker when `SENTRY_DSN` is set; no request data, user info or local variables are sent, and exception messages only if enabled (redacted).
 - User-scoped item CRUD at `/v1/items`, with cursor pagination and optional
   idempotency keys on signed-in mutations. The OpenAPI operation IDs use the module
   and handler names.
@@ -279,6 +279,7 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | `RESEND_API_KEY` / `RESEND_TIMEOUT_SECONDS` | Unset / `10` | Required with `EMAIL_BACKEND=resend`. The job id is sent as the `Idempotency-Key`. |
 | `WORKER_CONCURRENCY` / `JOB_POLL_INTERVAL_SECONDS` | `4` / `2` | Jobs the worker runs at once, and how often an idle runner polls. |
 | `JOB_TIMEOUT_SECONDS` / `JOB_LOCK_TIMEOUT_SECONDS` | `120` / `300` | A handler is cancelled after the first; a claim older than the second is treated as lost and the job runs again. The first must be shorter. |
+| `JOB_RETENTION_DAYS` | `3` | Jobs older than this are deleted whatever their state (payloads can hold one-time links). |
 | `PUSH_BACKEND` | `log` | `expo` (sends through the Expo Push API), `log` (logs counts only) or `memory` (tests). |
 | `EXPO_ACCESS_TOKEN` / `EXPO_PUSH_TIMEOUT_SECONDS` | Unset / `10` | Optional Expo access token (needed if the Expo project enforces enhanced push security). |
 | `STORAGE_BACKEND` | `disabled` | `s3` (S3, R2, MinIO), `memory` (tests) or `disabled`. |
@@ -288,6 +289,7 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | `STORAGE_ALLOWED_CONTENT_TYPES` | `["image/jpeg","image/png","image/webp","application/pdf"]` | JSON array of exact content types. |
 | `MIN_SUPPORTED_APP_VERSION` / `LATEST_APP_VERSION` | `0.0.0` / `1.0.0` | Returned by `GET /v1/meta`. Mobile clients below the minimum get `426 app_update_required`. |
 | `SENTRY_DSN` / `SENTRY_RELEASE` / `SENTRY_TRACES_SAMPLE_RATE` | Unset / `api@<version>` / `0` | Sentry for the API and worker; nothing is initialised without a DSN. |
+| `SENTRY_INCLUDE_EXCEPTION_MESSAGES` | `false` | Send exception messages (redacted) instead of only the exception type. |
 | `RATE_LIMIT_BACKEND`                                                         | `postgres`                                        | `postgres`, or `memory` (per process; development and test only).                                                                                                                                                                                                                                                 |
 | `CORS_ORIGINS`                                                               | `["http://localhost:3000"]`                       | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh.                        |
 | `TRUSTED_HOSTS`                                                              | `["localhost","127.0.0.1","[::1]"]`               | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host.                                                                                                                                                                                                           |
@@ -361,6 +363,7 @@ by its users, so none of them may be secret. EAS CLI does **not** read `.env`; s
 | `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
 | `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
 | `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
+| `SENTRY_INCLUDE_EXCEPTION_MESSAGES` | `false` | Send exception messages (redacted) instead of only the exception type. |
 
 ## Common commands
 
@@ -420,8 +423,8 @@ sign-in and account linking) and [ADR 0010](docs/adr/0010-rate-limits-email-audi
 | Endpoint                | Purpose                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `GET /v1/meta`          | `{min_supported_app_version, latest_app_version}`; no authentication, never version-gated.                                 |
-| `POST /v1/devices`      | Register or refresh the caller's Expo push token `{expo_push_token, platform, app_version}`. An existing token moves to the caller. |
-| `DELETE /v1/devices`    | Remove a token `{expo_push_token}` owned by the caller (call it on sign-out). Always `204`.                                |
+| `POST /v1/devices`      | Register or refresh the caller's Expo push token `{expo_push_token, platform, app_version}`. A token registered by someone else moves to the caller (audited). |
+| `DELETE /v1/devices`    | Remove a token `{expo_push_token}` owned by the caller. Clients call it before signing out. Always `204`.                                |
 
 **Tokens.** Access tokens are HMAC-signed JWTs (HS256 by default; `typ: at+jwt`; `iss`,
 `aud`, `sub`, `sid`, `iat`, `exp`, `jti`) valid for 15 minutes, with 30 seconds of

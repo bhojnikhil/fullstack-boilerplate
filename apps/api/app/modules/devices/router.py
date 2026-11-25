@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Response, status
 
 from app.core import API_PREFIX
+from app.core.client import Client
 from app.core.db import RequestSession
 from app.core.errors import ErrorEnvelope
 from app.modules.auth.dependencies import CurrentUser
@@ -15,10 +16,12 @@ router = APIRouter(
 
 
 @router.post("")
-async def register(data: DeviceRegister, user: CurrentUser, db: RequestSession) -> DeviceResponse:
+async def register(
+    data: DeviceRegister, user: CurrentUser, db: RequestSession, client: Client
+) -> DeviceResponse:
     """Register (or refresh) this installation's Expo push token for the signed-in user."""
     device = await register_device(
-        db, user.id, data.expo_push_token, data.platform, data.app_version
+        db, user.id, data.expo_push_token, data.platform, data.app_version, client
     )
     return DeviceResponse.model_validate(device)
 

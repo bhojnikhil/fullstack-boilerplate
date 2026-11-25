@@ -57,15 +57,19 @@ async def test_mobile_clients_at_or_above_the_minimum_continue(gated, version):
         ("web", None),
         (None, "0.0.1"),
         ("other", "0.0.1"),
-        ("ios", None),
-        ("ios", ""),
-        ("ios", "not-a-version"),
-        ("android", "1.2.3.4"),
     ],
 )
 async def test_web_unidentified_and_unparseable_clients_are_not_gated(gated, platform, version):
     response = await gated.get("/v1/items", headers=headers(platform, version))
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("platform", ["ios", "android"])
+@pytest.mark.parametrize("version", [None, "", " ", "not-a-version", "1.2.3.4", "v2.1.0", "2.x"])
+async def test_mobile_clients_with_a_missing_or_malformed_version_get_426(gated, platform, version):
+    response = await gated.get("/v1/items", headers=headers(platform, version))
+    assert response.status_code == 426
+    assert response.json()["error"]["code"] == "app_update_required"
 
 
 @pytest.mark.parametrize("path", ["/v1/meta", "/health", "/ready", "/openapi.json"])
@@ -101,13 +105,19 @@ async def test_meta_reports_configured_versions(gated):
     }
 
 
+async def test_unversioned_mobile_clients_can_still_read_meta(gated):
+    response = await gated.get("/v1/meta", headers=headers("android", None))
+    assert response.status_code == 200
+
+
 async def test_default_configuration_gates_nobody(client):
     assert (await client.get("/v1/meta")).json() == {
         "min_supported_app_version": "0.0.0",
         "latest_app_version": "1.0.0",
     }
-    response = await client.get("/v1/items", headers=headers("ios", "0.0.1"))
-    assert response.status_code == 401
+    for version in ("0.0.1", None, "junk"):
+        response = await client.get("/v1/items", headers=headers("ios", version))
+        assert response.status_code == 401
 
 
 @pytest.mark.parametrize(

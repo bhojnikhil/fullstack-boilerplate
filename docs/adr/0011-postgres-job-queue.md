@@ -23,13 +23,16 @@ A `jobs` table with `FOR UPDATE SKIP LOCKED` (`app/jobs`), not procrastinate or 
   a row to the session, so the job exists if and only if the request commits. A rolled-back
   request sends nothing (tested for email and push).
 - **Claiming.** A worker claims the oldest due job in a short transaction
-  (`SELECT ... FOR UPDATE SKIP LOCKED`, status `running`, `attempts + 1`) and runs the
-  handler outside any transaction or held connection. Success deletes the row.
+  (`SELECT ... FOR UPDATE SKIP LOCKED`, status `running`, `attempts + 1`, a fresh random
+  `lease_token`) and runs the handler outside any transaction or held connection. Success
+  deletes the row. Finishing or failing a job is conditional on the lease token
+  (`WHERE id = ... AND lease_token = ...`): a worker that outlived its lease cannot delete
+  or overwrite the job another worker reclaimed; it logs `job_lease_lost` and changes
+  nothing.
 - **Retries.** A failure requeues with exponential backoff (15 s doubling to 1 h, +-20%
   jitter) until `max_attempts` (8 for email, 5 for push, 3 for periodic jobs); then the job
-  is `dead`: its payload is cleared (it may hold addresses and links), only the exception
-  class name is kept, and dead jobs are purged after 14 days. Unknown job kinds die
-  immediately.
+  is `dead`: its payload is cleared (it may hold addresses and links) and only the
+  exception class name is kept. Unknown job kinds die immediately.
 - **At-least-once.** A claim older than `JOB_LOCK_TIMEOUT_SECONDS` (300) counts as lost and
   the job runs again; handlers are cancelled after `JOB_TIMEOUT_SECONDS` (120), which must
   be shorter. A job lost on its last attempt is marked dead, not run again. Email passes the
@@ -38,13 +41,18 @@ A `jobs` table with `FOR UPDATE SKIP LOCKED` (`app/jobs`), not procrastinate or 
 - **Periodic jobs.** Each worker's scheduler inserts one job per kind per interval with a
   unique `dedupe_key` (`periodic:<kind>:<interval bucket>`), so any number of workers
   schedule each run exactly once with no leader election: receipts every 15 minutes, purge
-  every hour.
+  every hour. A finished periodic job is not deleted: it stays as a payload-free `done`
+  marker, so its key keeps the interval taken until the next bucket (the scheduler polls
+  every 30 seconds and must not enqueue the same interval again). Markers are purged with
+  the other old jobs.
 - **Worker.** `python -m app.jobs` (SIGTERM finishes running jobs, then exits). One pool
   connection per concurrent runner plus one; `WORKER_CONCURRENCY` defaults to 4. Compose
   and the smoke overlay run it as the `worker` service; its health check is a heartbeat
   file touched by the scheduler loop (liveness, like `/health`, not database health).
 - **Purge** deletes in batches of 5000 using `ctid ... FOR UPDATE SKIP LOCKED`, so it never
-  waits on rows requests hold. Sessions are kept 7 days after expiry or 30 days after
+  waits on rows requests hold. Jobs go `JOB_RETENTION_DAYS` (default 3) after creation
+  whatever their state (dead, `done` markers, or queued and never delivered), so payloads
+  cannot accumulate. Sessions are kept 7 days after expiry or 30 days after
   revocation; refresh tokens go with their sessions (cascade); account tokens 1 day after
   expiry; idempotency records and rate-limit windows when expired.
 
@@ -55,8 +63,16 @@ emails in the same transaction as its writes instead of sending them.
 ## Consequences
 
 - Delivery needs a running worker. Without one, mail queues up (visible in `jobs`).
-- Payloads can hold personal data and one-time links until delivered; they are deleted
-  on success and cleared on death. Do not enqueue secrets that are not already emailed.
+- **Job payloads are sensitive.** An email job holds the recipient and the full rendered
+  message, which includes bearer links (verification, password reset, email change);
+  a push job holds its title, body and a small allowlisted `data`. They are stored in
+  plaintext, live until the job is delivered (minutes, or hours while retrying), and are
+  deleted on success, cleared on death and purged after `JOB_RETENTION_DAYS`. Anyone who
+  can read the database can already read the account tokens' hashes, sessions and every
+  user's data, so this widens the exposure little but not to zero: a read of the jobs table
+  during that window yields usable links. Do not enqueue secrets that are not already
+  emailed. Follow-up if that is not acceptable: encrypt payloads at rest with a key held
+  only by the API and worker (not built).
 - Postgres load grows with job volume; this is for transactional volume, not bulk.
 - Production email is `smtp` (TLS required, as before) or `resend`; `console` and
   `memory` stay development/test only.

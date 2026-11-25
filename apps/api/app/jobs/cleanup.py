@@ -35,11 +35,20 @@ RULES = (
     PurgeRule("account_tokens", "expires_at < now() - interval '1 day'"),
     PurgeRule("idempotency_records", "expires_at < now()"),
     PurgeRule("rate_limits", "resets_at < now()"),
-    PurgeRule("jobs", "status = 'dead' and updated_at < now() - interval '14 days'"),
+    # Job payloads can hold personal data and one-time links (docs/adr/0011): nothing
+    # outlives the retention window, whatever its state (dead, finished periodic markers,
+    # or queued and never delivered).
+    PurgeRule(
+        "jobs",
+        "created_at < now() - make_interval(days => :job_days)"
+        " or (status in ('dead', 'done') and updated_at < now() - make_interval(days => :job_days))",
+    ),
 )
 
 
-async def purge_table(sessions: SessionFactory, rule: PurgeRule) -> int:
+async def purge_table(
+    sessions: SessionFactory, rule: PurgeRule, job_retention_days: int = 3
+) -> int:
     statement = text(
         f"delete from {rule.table} where ctid in ("  # noqa: S608 - fixed identifiers
         f"select ctid from {rule.table} where {rule.condition} limit :batch "
@@ -48,17 +57,20 @@ async def purge_table(sessions: SessionFactory, rule: PurgeRule) -> int:
     total = 0
     while True:
         async with sessions.begin() as db:
-            result = cast(CursorResult[Any], await db.execute(statement, {"batch": BATCH_SIZE}))
+            result = cast(
+                CursorResult[Any],
+                await db.execute(statement, {"batch": BATCH_SIZE, "job_days": job_retention_days}),
+            )
             deleted = int(result.rowcount)
         total += deleted
         if deleted < BATCH_SIZE:
             return total
 
 
-async def purge_expired(sessions: SessionFactory) -> dict[str, int]:
+async def purge_expired(sessions: SessionFactory, job_retention_days: int = 3) -> dict[str, int]:
     counts = {}
     for rule in RULES:
-        counts[rule.table] = await purge_table(sessions, rule)
+        counts[rule.table] = await purge_table(sessions, rule, job_retention_days)
     log.info("purged_expired_rows", **counts)
     return counts
 

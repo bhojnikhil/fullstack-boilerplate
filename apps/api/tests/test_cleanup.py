@@ -89,10 +89,14 @@ async def seed(session_factory, user) -> dict[str, list]:
             )
         for key, resets in (("rule:old", -1), ("rule:live", 1)):
             db.add(RateLimitWindow(key=key, count=1, resets_at=NOW + timedelta(minutes=resets)))
+        # (status, age in days): job payloads may hold one-time links, so every state expires.
         for status, age in (
-            (JobStatus.DEAD, 15),
+            (JobStatus.DEAD, 4),
+            (JobStatus.DONE, 4),
+            (JobStatus.QUEUED, 4),
+            (JobStatus.RUNNING, 4),
             (JobStatus.DEAD, 2),
-            (JobStatus.QUEUED, 30),
+            (JobStatus.QUEUED, 2),
         ):
             db.add(
                 Job(
@@ -101,6 +105,7 @@ async def seed(session_factory, user) -> dict[str, list]:
                     status=status,
                     attempts=0,
                     max_attempts=1,
+                    created_at=NOW - timedelta(days=age),
                     updated_at=NOW - timedelta(days=age),
                 )
             )
@@ -115,7 +120,7 @@ async def test_purge_removes_only_what_expired(session_factory, test_user):
         "account_tokens": 1,
         "idempotency_records": 1,
         "rate_limits": 1,
-        "jobs": 1,
+        "jobs": 4,
     }
     assert await count(session_factory, AuthSession) == 3
     async with session_factory() as db:
@@ -156,3 +161,19 @@ async def test_purge_runs_as_a_job(session_factory, job_context, test_user):
     await queue.enqueue_once(session_factory, PURGE_EXPIRED, "test-purge")
     assert await drain(job_context) >= 1
     assert await count(session_factory, AuthSession) == 3
+
+
+async def test_job_retention_is_configurable(session_factory):
+    async with session_factory.begin() as db:
+        db.add(
+            Job(
+                kind="x",
+                payload={"link": "https://web.example.com/verify#token=t"},
+                status=JobStatus.QUEUED,
+                attempts=0,
+                max_attempts=1,
+                created_at=NOW - timedelta(days=2),
+            )
+        )
+    assert (await cleanup.purge_expired(session_factory, job_retention_days=3))["jobs"] == 0
+    assert (await cleanup.purge_expired(session_factory, job_retention_days=1))["jobs"] == 1

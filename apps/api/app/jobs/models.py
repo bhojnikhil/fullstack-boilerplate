@@ -15,6 +15,9 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     # Attempts exhausted (or the job kind is unknown). Kept for inspection, payload cleared.
     DEAD = "dead"
+    # A finished periodic job, kept (payload empty) so its dedupe key still marks the
+    # interval as scheduled. Other finished jobs are deleted.
+    DONE = "done"
 
 
 class Job(Base):
@@ -42,6 +45,9 @@ class Job(Base):
     max_attempts: Mapped[int] = mapped_column(Integer)
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Identifies the current claim. Finishing a job requires the token it was claimed
+    # with, so a worker that outlived its lease cannot touch the new claimant's job.
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     dedupe_key: Mapped[str | None] = mapped_column(String(128))
     # The exception class only: messages can contain addresses or tokens.
     last_error: Mapped[str | None] = mapped_column(Text)

@@ -269,3 +269,63 @@ async def test_deferred_account_work_commits_its_emails_with_its_changes(
     )
     assert response.status_code in {200, 201, 202}
     assert [email.to for email in outbox] == ["new@example.com"]
+
+
+async def test_a_stale_worker_cannot_finish_the_job_a_new_worker_reclaimed(
+    session_factory, job_context
+):
+    await add_job(session_factory, payload={"n": 1})
+    stale = await queue.claim(session_factory, LOCK_TIMEOUT)
+    assert stale is not None
+    async with session_factory.begin() as db:
+        await db.execute(update(Job).values(locked_at=func.now() - timedelta(minutes=6)))
+    current = await queue.claim(session_factory, LOCK_TIMEOUT)
+    assert current is not None and current.id == stale.id
+    assert current.lease_token != stale.lease_token
+
+    # The paused worker wakes up: neither success nor failure touches the live claim.
+    assert await queue.succeed(session_factory, stale) is False
+    assert await queue.fail(session_factory, stale, "Boom") is None
+    [job] = await jobs(session_factory)
+    assert (job.status, job.attempts, job.lease_token, job.last_error) == (
+        "running",
+        2,
+        current.lease_token,
+        None,
+    )
+
+    assert await queue.succeed(session_factory, current) is True
+    assert await jobs(session_factory) == []
+    # A late result after the job is gone is also a no-op.
+    assert await queue.succeed(session_factory, current) is False
+
+
+async def test_a_periodic_job_runs_once_per_interval_even_after_it_succeeds(
+    session_factory, job_context
+):
+    ran = []
+
+    async def tick(ctx, job_id, payload):
+        ran.append(job_id)
+
+    periodic = {"tick": timedelta(minutes=10)}
+    handlers = handlers_with(tick=tick)
+    start = datetime(2026, 11, 25, 12, 0, 1, tzinfo=UTC)
+    assert await schedule_periodic(session_factory, periodic, start) == 1
+    assert await run_one(job_context, handlers)
+    assert len(ran) == 1
+    [marker] = await jobs(session_factory)
+    assert (marker.status, marker.payload) == ("done", {})
+
+    # The scheduler polls every 30 seconds: nothing may be enqueued again within the interval.
+    for seconds in (30, 60, 300, 598):
+        assert (
+            await schedule_periodic(session_factory, periodic, start + timedelta(seconds=seconds))
+            == 0
+        )
+    assert not await run_one(job_context, handlers)
+    assert len(ran) == 1
+
+    assert await schedule_periodic(session_factory, periodic, start + timedelta(minutes=10)) == 1
+    assert await run_one(job_context, handlers)
+    assert len(ran) == 2

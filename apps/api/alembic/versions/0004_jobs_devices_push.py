@@ -34,6 +34,7 @@ def upgrade() -> None:
             "run_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
         ),
         sa.Column("locked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("lease_token", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("dedupe_key", sa.String(length=128), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column(
@@ -94,6 +95,7 @@ def upgrade() -> None:
         "push_tickets",
         sa.Column("ticket_id", sa.String(length=64), nullable=False),
         sa.Column("device_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("message", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

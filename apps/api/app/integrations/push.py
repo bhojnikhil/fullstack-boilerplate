@@ -8,7 +8,7 @@ push service could hand the message to FCM/APNs and whether the device is gone.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 import httpx
 import structlog
@@ -24,6 +24,19 @@ MAX_MESSAGES_PER_REQUEST = 100
 MAX_RECEIPTS_PER_REQUEST = 1000
 EXPO_TOKEN_PATTERN = re.compile(r"(?:Expo|Exponent)PushToken\[[A-Za-z0-9_-]{1,100}\]")
 DEVICE_NOT_REGISTERED = "DeviceNotRegistered"
+
+
+# How a ticket or receipt error is handled (https://docs.expo.dev/push-notifications/sending-notifications/):
+# "gone": the token is dead, delete the device. "retry": transient (rate limited or an
+# unreadable answer), send again later to that device only. "permanent": retrying cannot
+# help (MessageTooBig, InvalidCredentials, MismatchSenderId, ...): give up and log the code.
+RETRYABLE_ERRORS = frozenset({"MessageRateExceeded", "unknown_error"})
+
+
+def classify_error(error: str) -> Literal["gone", "retry", "permanent"]:
+    if error == DEVICE_NOT_REGISTERED:
+        return "gone"
+    return "retry" if error in RETRYABLE_ERRORS else "permanent"
 
 
 class PushUnavailableError(Exception):
@@ -77,6 +90,8 @@ class MemoryPushBackend:
     def __init__(self) -> None:
         self.sent: list[PushMessage] = []
         self.unregistered: set[str] = set()
+        # token -> ticket error code (e.g. "MessageRateExceeded"), cleared by the test.
+        self.ticket_errors: dict[str, str] = {}
         self.receipt_errors: dict[str, str] = {}
         self.fail_with: Exception | None = None
         self._tickets: dict[str, str] = {}
@@ -88,6 +103,9 @@ class MemoryPushBackend:
         for message in messages:
             if message.to in self.unregistered:
                 tickets.append(Ticket(error=DEVICE_NOT_REGISTERED))
+                continue
+            if message.to in self.ticket_errors:
+                tickets.append(Ticket(error=self.ticket_errors[message.to]))
                 continue
             self.sent.append(message)
             ticket_id = f"ticket-{len(self._tickets)}"

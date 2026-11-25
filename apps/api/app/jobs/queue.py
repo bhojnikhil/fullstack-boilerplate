@@ -11,15 +11,17 @@ import random
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, or_, select, update
+import structlog
+from sqlalchemy import ColumnElement, Delete, Update, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionFactory
 from app.jobs.models import Job, JobStatus
 
+log = structlog.get_logger()
 BACKOFF_BASE = timedelta(seconds=15)
 BACKOFF_CAP = timedelta(hours=1)
 DEFAULT_MAX_ATTEMPTS = 6
@@ -89,6 +91,8 @@ class Claimed:
     payload: dict[str, object]
     attempts: int
     max_attempts: int
+    lease_token: UUID
+    dedupe_key: str | None
 
 
 async def claim(sessions: SessionFactory, lock_timeout: timedelta) -> Claimed | None:
@@ -111,29 +115,60 @@ async def claim(sessions: SessionFactory, lock_timeout: timedelta) -> Claimed | 
             return None
         job.status = JobStatus.RUNNING
         job.locked_at = func.now()
+        job.lease_token = uuid4()
         job.attempts += 1
-        claimed = Claimed(job.id, job.kind, dict(job.payload), job.attempts, job.max_attempts)
-    return claimed
+        return Claimed(
+            job.id,
+            job.kind,
+            dict(job.payload),
+            job.attempts,
+            job.max_attempts,
+            job.lease_token,
+            job.dedupe_key,
+        )
 
 
-async def succeed(sessions: SessionFactory, job_id: UUID) -> None:
+def _held(job: Claimed) -> ColumnElement[bool]:
+    return (Job.id == job.id) & (Job.lease_token == job.lease_token)
+
+
+async def _finish(sessions: SessionFactory, job: Claimed, statement: Delete | Update) -> bool:
     async with sessions.begin() as db:
-        await db.execute(delete(Job).where(Job.id == job_id))
+        applied = (await db.execute(statement.returning(Job.id))).first() is not None
+    if not applied:
+        # The lease expired and another worker reclaimed (and maybe finished) the job.
+        log.warning("job_lease_lost", kind=job.kind, job_id=str(job.id))
+    return applied
+
+
+async def succeed(sessions: SessionFactory, job: Claimed) -> bool:
+    """Finish a job. Periodic jobs stay as a payload-free marker for their interval.
+
+    False (and nothing changes) if this worker no longer holds the claim.
+    """
+    if job.dedupe_key is not None:
+        done = (
+            update(Job)
+            .where(_held(job))
+            .values(status=JobStatus.DONE, payload={}, locked_at=None, lease_token=None)
+        )
+        return await _finish(sessions, job, done)
+    return await _finish(sessions, job, delete(Job).where(_held(job)))
 
 
 async def fail(
     sessions: SessionFactory, job: Claimed, error: str, *, retry: bool = True
-) -> JobStatus:
-    """Schedule a retry with backoff, or kill the job when attempts are exhausted."""
+) -> JobStatus | None:
+    """Schedule a retry with backoff, or kill the job when attempts are exhausted.
+
+    None if this worker no longer holds the claim.
+    """
     dead = not retry or job.attempts >= job.max_attempts
-    values: dict[str, object] = {"last_error": error[:200], "locked_at": None}
+    values: dict[str, object] = {"last_error": error[:200], "locked_at": None, "lease_token": None}
     if dead:
         values |= {"status": JobStatus.DEAD, "payload": {}}
     else:
-        values |= {
-            "status": JobStatus.QUEUED,
-            "run_at": func.now() + backoff(job.attempts),
-        }
-    async with sessions.begin() as db:
-        await db.execute(update(Job).where(Job.id == job.id).values(**values))
+        values |= {"status": JobStatus.QUEUED, "run_at": func.now() + backoff(job.attempts)}
+    if not await _finish(sessions, job, update(Job).where(_held(job)).values(**values)):
+        return None
     return JobStatus.DEAD if dead else JobStatus.QUEUED
