@@ -106,5 +106,5 @@ if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [[ "$output" != *JWT_SECRET_K
     exit 1
 fi
 
-echo "api: verified production HSTS, trusted hosts, sign-up email over SMTP, secure refresh" \
-    "cookie, JSON logs and missing-secret startup rejection"
+echo "api: verified production HSTS, trusted hosts, sign-up email queued and sent by the worker" \
+    "over SMTP, secure refresh cookie, JSON logs and missing-secret startup rejection"

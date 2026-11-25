@@ -12,9 +12,9 @@ Compose, and is tested in GitHub Actions.
 > - The web app has email verification, but the forgot-password, reset-password and
 >   confirm-email pages are planned for phase 8b. Until then, post those emailed tokens
 >   to the API (see [Authentication](#authentication)).
-> - Email is sent by an in-process task after the response. A crash or SMTP outage at that
->   moment loses the message; a durable job queue with retries is planned.
-> - Expired sessions, refresh tokens, emailed tokens and rate-limit rows are not purged yet.
+> - Email, push and cleanup need the `worker` process (`python -m app.jobs`) to be running;
+>   without it, messages wait in the `jobs` table. Real Resend/SMTP delivery, Expo push and
+>   S3/R2 presigned URLs have not been exercised against the live services (see below).
 > - The web app has no Google sign-in button yet (the API endpoint exists).
 
 ## Repository layout
@@ -42,9 +42,23 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   email verification, password reset, Sign in with Google by ID token, 15-minute access
   JWTs with rotating refresh tokens per device session, session management, step-up
   re-authentication, account deletion, Postgres-backed rate limiting and an audit log.
-- Email through a small provider interface: console (development), SMTP, and an
+- Email through a small provider interface: console (development), SMTP, Resend, and an
   in-memory backend for tests. Compose runs [Mailpit](https://mailpit.axllent.org/) to
   view messages locally.
+- Background jobs ([ADR 0011](docs/adr/0011-postgres-job-queue.md)): a Postgres job table
+  (`FOR UPDATE SKIP LOCKED`) with retries and backoff, run by a separate worker
+  (`python -m app.jobs`, the `worker` Compose service). Emails are enqueued in the
+  request's transaction, so a rolled-back request sends nothing. Periodic jobs process push
+  receipts (15 min) and purge expired sessions, refresh tokens, emailed tokens, idempotency
+  records, rate-limit rows and old dead jobs (hourly).
+- Push ([ADR 0012](docs/adr/0012-push-storage-version-gate-sentry.md)): `POST`/`DELETE
+  /v1/devices` register and remove Expo push tokens; jobs send through the Expo Push API
+  and prune tokens that receipts report as `DeviceNotRegistered`.
+- S3-compatible storage interface (S3, R2, MinIO) with presigned upload/download URLs and
+  type/size limits. No endpoint uses it yet.
+- `GET /v1/meta` and a `426 app_update_required` gate for mobile clients below
+  `MIN_SUPPORTED_APP_VERSION` (`X-App-Version`/`X-Platform` headers; web is never gated).
+- Sentry for the API and worker when `SENTRY_DSN` is set; no personal data is sent.
 - User-scoped item CRUD at `/v1/items`, with cursor pagination and optional
   idempotency keys on signed-in mutations. The OpenAPI operation IDs use the module
   and handler names.
@@ -98,7 +112,7 @@ the API yet: no sign-in, no data.
   - Web: Next.js standalone server, running as the unprivileged `node` user.
   - Both have `HEALTHCHECK`s that require a 2xx response and don't follow redirects.
 - `docker-compose.yml`: `postgres`, `api` (`dev` target, hot reload, source mounted),
-  `web` (production build; rebuild to see changes, or use `make dev` for hot reload) and
+  `worker` (same image, `python -m app.jobs`, no reload), `web` (production build; rebuild to see changes, or use `make dev` for hot reload) and
   `mailpit` (SMTP on 1025, inbox UI on 8025). The API sends its email to Mailpit.
 - `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
   and local DBs (at any depth) out of images.
@@ -111,11 +125,11 @@ the API yet: no sign-in, no data.
     mobile), Vitest, and Playwright against the standalone build;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
-    mailpit, api and web as packaged, and require all to be healthy. The API smoke uses
+    mailpit, api, worker and web as packaged, and require all to be healthy. The API smoke uses
     production settings, temporary signing keys and a host allowlist that excludes
     loopback. It checks HSTS, JSON logs, startup failure without `SECRET_KEY` or
-    `JWT_SECRET_KEY`, and a sign-up whose verification email is delivered over SMTP to
-    Mailpit, verified, and followed by a web sign-in that sets a `Secure`, `HttpOnly`,
+    `JWT_SECRET_KEY`, and a sign-up whose verification email is queued, sent by the worker over
+    SMTP to Mailpit, verified, and followed by a web sign-in that sets a `Secure`, `HttpOnly`,
     `SameSite=Strict` refresh cookie. CI requires `/ready` to return HTTP 503 before
     explicit migrations and 2xx afterward. The web smoke requires direct 200 JSON
     responses and one-hour cache headers from both association URLs. It checks security
@@ -256,13 +270,25 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | `WEB_URL`                                                                    | `http://localhost:3000`                           | Base URL of the web app for emailed links. Staging and production require `https`.                                                                                                                                                                                                                                |
 | `GOOGLE_AUTH_ENABLED`                                                        | `false`                                           | Enables `POST /v1/auth/google`. Requires at least one client ID below.                                                                                                                                                                                                                                            |
 | `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset                                             | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed.                                                                                                                                                                                                       |
-| `EMAIL_BACKEND`                                                              | `console`                                         | `console` (prints messages and links; development), `smtp`, or `memory` (tests). Staging and production require `smtp`. Compose uses `smtp` with Mailpit.                                                                                                                                                         |
+| `EMAIL_BACKEND` | `console` | `console` (prints messages and links; development), `smtp`, `resend`, or `memory` (tests). Staging and production require `smtp` or `resend`. Compose uses `smtp` with Mailpit. |
 | `EMAIL_FROM`                                                                 | `Boilerplate App <no-reply@localhost>`            | Sender address.                                                                                                                                                                                                                                                                                                   |
 | `SMTP_HOST` / `SMTP_PORT`                                                    | `localhost` / `1025`                              | SMTP server.                                                                                                                                                                                                                                                                                                      |
 | `SMTP_SECURITY`                                                              | `none`                                            | `none`, `starttls`, or `tls` (implicit TLS).                                                                                                                                                                                                                                                                      |
 | `SMTP_USERNAME` / `SMTP_PASSWORD`                                            | Unset                                             | Set both or neither.                                                                                                                                                                                                                                                                                              |
 | `SMTP_ALLOW_INSECURE`                                                        | `false`                                           | Explicitly allow an unauthenticated plaintext local relay outside development/test. Authenticated SMTP always requires TLS.                                                                                                                                                                                       |
 | `SMTP_TIMEOUT_SECONDS`                                                       | `10`                                              | SMTP connection timeout.                                                                                                                                                                                                                                                                                          |
+| `RESEND_API_KEY` / `RESEND_TIMEOUT_SECONDS` | Unset / `10` | Required with `EMAIL_BACKEND=resend`. The job id is sent as the `Idempotency-Key`. |
+| `WORKER_CONCURRENCY` / `JOB_POLL_INTERVAL_SECONDS` | `4` / `2` | Jobs the worker runs at once, and how often an idle runner polls. |
+| `JOB_TIMEOUT_SECONDS` / `JOB_LOCK_TIMEOUT_SECONDS` | `120` / `300` | A handler is cancelled after the first; a claim older than the second is treated as lost and the job runs again. The first must be shorter. |
+| `PUSH_BACKEND` | `log` | `expo` (sends through the Expo Push API), `log` (logs counts only) or `memory` (tests). |
+| `EXPO_ACCESS_TOKEN` / `EXPO_PUSH_TIMEOUT_SECONDS` | Unset / `10` | Optional Expo access token (needed if the Expo project enforces enhanced push security). |
+| `STORAGE_BACKEND` | `disabled` | `s3` (S3, R2, MinIO), `memory` (tests) or `disabled`. |
+| `STORAGE_ENDPOINT_URL` / `STORAGE_BUCKET` / `STORAGE_REGION` | Unset / unset / `auto` | S3 endpoint (https outside development/test; path-style), bucket and signing region (`auto` for R2, e.g. `us-east-1` for S3). |
+| `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` | Unset | Required with `STORAGE_BACKEND=s3`. |
+| `STORAGE_MAX_UPLOAD_BYTES` / `STORAGE_URL_EXPIRE_SECONDS` | `10485760` / `600` | Largest allowed upload, and how long presigned URLs live. |
+| `STORAGE_ALLOWED_CONTENT_TYPES` | `["image/jpeg","image/png","image/webp","application/pdf"]` | JSON array of exact content types. |
+| `MIN_SUPPORTED_APP_VERSION` / `LATEST_APP_VERSION` | `0.0.0` / `1.0.0` | Returned by `GET /v1/meta`. Mobile clients below the minimum get `426 app_update_required`. |
+| `SENTRY_DSN` / `SENTRY_RELEASE` / `SENTRY_TRACES_SAMPLE_RATE` | Unset / `api@<version>` / `0` | Sentry for the API and worker; nothing is initialised without a DSN. |
 | `RATE_LIMIT_BACKEND`                                                         | `postgres`                                        | `postgres`, or `memory` (per process; development and test only).                                                                                                                                                                                                                                                 |
 | `CORS_ORIGINS`                                                               | `["http://localhost:3000"]`                       | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh.                        |
 | `TRUSTED_HOSTS`                                                              | `["localhost","127.0.0.1","[::1]"]`               | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host.                                                                                                                                                                                                           |
@@ -389,6 +415,14 @@ sign-in and account linking) and [ADR 0010](docs/adr/0010-rate-limits-email-audi
 | `POST /v1/me/password`                  | Change the password (current password required); signs out other sessions.                  |
 | `POST /v1/me/email`                     | Request an email change; the address changes once the new one is confirmed.                 |
 | `DELETE /v1/me`                         | Delete the account (recent re-authentication required).                                     |
+
+**Platform endpoints.**
+
+| Endpoint                | Purpose                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/meta`          | `{min_supported_app_version, latest_app_version}`; no authentication, never version-gated.                                 |
+| `POST /v1/devices`      | Register or refresh the caller's Expo push token `{expo_push_token, platform, app_version}`. An existing token moves to the caller. |
+| `DELETE /v1/devices`    | Remove a token `{expo_push_token}` owned by the caller (call it on sign-out). Always `204`.                                |
 
 **Tokens.** Access tokens are HMAC-signed JWTs (HS256 by default; `typ: at+jwt`; `iss`,
 `aud`, `sub`, `sid`, `iat`, `exp`, `jti`) valid for 15 minutes, with 30 seconds of

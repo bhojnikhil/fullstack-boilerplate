@@ -44,7 +44,7 @@ dev: migrate-compose ## postgres + api in Docker (hot reload), web dev server on
 
 # ============================== Docker ======================================
 
-up: migrate-compose ## Migrate the database, then start api, web and mailpit in Docker
+up: migrate-compose ## Migrate the database, then start api, worker, web and mailpit in Docker
 	$(COMPOSE) up -d
 	@printf "$(GREEN)✓ Services started$(NC)\n"
 	@echo "  Web:      http://localhost:$(WEB_PORT)"
@@ -75,7 +75,7 @@ smoke: ## Check the packaged containers, production API and public web pages
 	@set -eu; \
 	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
 	SMOKE_JWT_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_JWT_SECRET_KEY; \
-	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres mailpit api web; \
+	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres mailpit api worker web; \
 	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && ! $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready 503; then \
 		echo "Expected HTTP 503 from /ready before migrations" >&2; exit 1; \
 	fi; \
@@ -83,8 +83,8 @@ smoke: ## Check the packaged containers, production API and public web pages
 	$(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; \
 	./scripts/check-production-api.sh; \
 	./scripts/check-production-web.sh; \
-	./scripts/check-containers.sh api web
-	@printf "$(GREEN)✓ postgres, mailpit, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
+	./scripts/check-containers.sh api worker web
+	@printf "$(GREEN)✓ postgres, mailpit, api, worker and web are healthy; api, worker and web are non-root and unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 

@@ -8,7 +8,6 @@ from pydantic import SecretStr
 
 from app.core.db import RequestSession
 from app.core.errors import DomainError, ErrorCode
-from app.core.logging import configure_logging
 from app.integrations import email as email_module
 from app.integrations.email import (
     ConsoleEmailBackend,
@@ -17,7 +16,6 @@ from app.integrations.email import (
     MemoryEmailBackend,
     SmtpEmailBackend,
     build_email_backend,
-    deliver,
 )
 from app.integrations.email.templates import Template, render
 from app.modules.items.models import Item
@@ -137,20 +135,6 @@ def test_backend_selection(config):
     assert isinstance(build_email_backend(smtp), SmtpEmailBackend)
     console = config.model_copy(update={"email_backend": "console"})
     assert isinstance(build_email_backend(console), ConsoleEmailBackend)
-
-
-async def test_delivery_failures_are_logged_without_the_address(capsys):
-    configure_logging("test")
-
-    class Broken:
-        async def send(self, email):
-            raise OSError("550 mailbox person@example.com unavailable")
-
-    await deliver(Broken(), message())
-    output = capsys.readouterr().err
-    assert "email_delivery_failed" in output
-    assert "verify_email" in output
-    assert "person@example.com" not in output
 
 
 @pytest.fixture

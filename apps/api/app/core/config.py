@@ -20,6 +20,12 @@ ORIGIN_PATTERN = re.compile(
     r"https?://(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]+)?", re.IGNORECASE | re.ASCII
 )
 GOOGLE_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9-]+\.apps\.googleusercontent\.com")
+VERSION_PATTERN = re.compile(
+    r"[0-9]{1,6}(?:\.[0-9]{1,6}){0,2}(?:[-+][0-9A-Za-z.+-]{1,32})?", re.ASCII
+)
+CONTENT_TYPE_PATTERN = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9.+-]{0,60}/[A-Za-z0-9][A-Za-z0-9.+-]{0,60}"
+)
 JwtAlgorithm = Literal["HS256", "HS384", "HS512"]
 
 
@@ -96,7 +102,7 @@ class Settings(DatabaseSettings):
     google_android_client_id: str = ""
     google_ios_client_id: str = ""
 
-    email_backend: Literal["console", "smtp", "memory"] = "console"
+    email_backend: Literal["console", "smtp", "resend", "memory"] = "console"
     email_from: str = Field(default="Boilerplate App <no-reply@localhost>", min_length=3)
     smtp_host: str = "localhost"
     smtp_port: int = Field(default=1025, gt=0, lt=65536)
@@ -107,6 +113,46 @@ class Settings(DatabaseSettings):
     # private network (a sidecar). Credentials are never sent without TLS.
     smtp_allow_insecure: bool = False
     smtp_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    resend_api_key: SecretStr = SecretStr("")
+    resend_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
+    # Background jobs (the worker process; see docs/adr/0011-postgres-job-queue.md).
+    job_poll_interval_seconds: float = Field(default=2, gt=0, le=60)
+    worker_concurrency: int = Field(default=4, ge=1, le=64)
+    # A job claimed longer ago than this is presumed lost with its worker and is re-run.
+    # Handlers are cancelled after JOB_TIMEOUT_SECONDS, which must be shorter.
+    job_lock_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    job_timeout_seconds: int = Field(default=120, ge=5, le=3000)
+
+    # Expo push notifications. "log" only logs counts (never tokens or message text).
+    push_backend: Literal["expo", "log", "memory"] = "log"
+    expo_access_token: SecretStr = SecretStr("")
+    expo_push_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
+    # Object storage (S3-compatible: AWS S3, Cloudflare R2, MinIO). "disabled" by default.
+    storage_backend: Literal["s3", "memory", "disabled"] = "disabled"
+    storage_endpoint_url: HttpUrl | None = None
+    storage_region: str = "auto"
+    storage_bucket: str = ""
+    storage_access_key_id: str = ""
+    storage_secret_access_key: SecretStr = SecretStr("")
+    storage_max_upload_bytes: int = Field(default=10_485_760, gt=0, le=5_368_709_120)
+    storage_allowed_content_types: list[str] = [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "application/pdf",
+    ]
+    storage_url_expire_seconds: int = Field(default=600, ge=30, le=3600)
+
+    # Mobile version gate: GET /v1/meta, and 426 app_update_required below the minimum.
+    min_supported_app_version: str = "0.0.0"
+    latest_app_version: str = "1.0.0"
+
+    # Error reporting. Without a DSN Sentry is not initialised at all.
+    sentry_dsn: SecretStr | None = None
+    sentry_release: str = ""
+    sentry_traces_sample_rate: float = Field(default=0, ge=0, le=1)
 
     rate_limit_backend: Literal["postgres", "memory"] = "postgres"
 
@@ -132,6 +178,27 @@ class Settings(DatabaseSettings):
             if "*" in host and host != "*" and ("*" in host[1:] or not host.startswith("*.")):
                 raise ValueError("Trusted host wildcards must use *.example.com")
         return hosts
+
+    @field_validator("storage_endpoint_url", mode="before")
+    @classmethod
+    def blank_endpoint_is_unset(cls, value: object) -> object:
+        # .env files list every variable; a blank one means "not configured".
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("min_supported_app_version", "latest_app_version")
+    @classmethod
+    def validate_app_version(cls, version: str) -> str:
+        if not VERSION_PATTERN.fullmatch(version):
+            raise ValueError("App versions look like 1.2.3 (an optional -suffix is ignored)")
+        return version
+
+    @field_validator("storage_allowed_content_types")
+    @classmethod
+    def validate_content_types(cls, types: list[str]) -> list[str]:
+        for item in types:
+            if not CONTENT_TYPE_PATTERN.fullmatch(item):
+                raise ValueError("Storage content types must be exact (type/subtype), no wildcards")
+        return [item.lower() for item in types]
 
     @field_validator("google_web_client_id", "google_android_client_id", "google_ios_client_id")
     @classmethod
@@ -190,8 +257,8 @@ class Settings(DatabaseSettings):
         if not self.local:
             if "*" in self.trusted_hosts:
                 raise ValueError("TRUSTED_HOSTS cannot contain '*' in staging or production")
-            if self.email_backend != "smtp":
-                raise ValueError("EMAIL_BACKEND must be smtp in staging and production")
+            if self.email_backend not in {"smtp", "resend"}:
+                raise ValueError("EMAIL_BACKEND must be smtp or resend in staging and production")
             if self.rate_limit_backend != "postgres":
                 raise ValueError("RATE_LIMIT_BACKEND must be postgres in staging and production")
             if self.web_url.scheme != "https":
@@ -204,6 +271,26 @@ class Settings(DatabaseSettings):
                 "GOOGLE_AUTH_ENABLED requires at least one of GOOGLE_WEB_CLIENT_ID, "
                 "GOOGLE_ANDROID_CLIENT_ID or GOOGLE_IOS_CLIENT_ID"
             )
+        if self.email_backend == "resend" and not secret_value(self.resend_api_key):
+            raise ValueError("EMAIL_BACKEND=resend requires RESEND_API_KEY")
+        if self.storage_backend == "s3":
+            required = (
+                self.storage_endpoint_url,
+                self.storage_bucket,
+                self.storage_access_key_id,
+                secret_value(self.storage_secret_access_key),
+            )
+            if not all(required):
+                raise ValueError(
+                    "STORAGE_BACKEND=s3 requires STORAGE_ENDPOINT_URL, STORAGE_BUCKET, "
+                    "STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY"
+                )
+            if self.storage_endpoint_url and (
+                self.storage_endpoint_url.scheme != "https" and not self.local
+            ):
+                raise ValueError("STORAGE_ENDPOINT_URL must use https in staging and production")
+        if self.job_timeout_seconds >= self.job_lock_timeout_seconds:
+            raise ValueError("JOB_TIMEOUT_SECONDS must be shorter than JOB_LOCK_TIMEOUT_SECONDS")
         if bool(self.smtp_username) != bool(self.smtp_password.get_secret_value()):
             raise ValueError("SMTP_USERNAME and SMTP_PASSWORD must be set together")
         if self.smtp_security == "none":

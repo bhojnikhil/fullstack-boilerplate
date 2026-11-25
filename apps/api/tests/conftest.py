@@ -24,7 +24,11 @@ from app.core.client import ClientInfo, Platform
 from app.core.config import Settings, postgres_url
 from app.core.security import PASSWORDS
 from app.factory import create_app
+from app.integrations.email import MemoryEmailBackend
 from app.integrations.google_id_token import GoogleIdentity, GoogleTokenError, identity_from_claims
+from app.integrations.push import MemoryPushBackend
+from app.jobs.handlers import JobContext
+from app.jobs.worker import drain
 from app.modules.auth.models import SignInMethod, User
 from app.modules.auth.sessions import IssuedTokens, SessionService
 
@@ -174,13 +178,39 @@ def app(config, session_factory, google):
 
 
 @pytest.fixture
-def outbox(app) -> list:
-    return app.state.email_backend.outbox
+def job_context(config, session_factory) -> JobContext:
+    """The worker's dependencies with in-memory providers."""
+    return JobContext(config, session_factory, MemoryEmailBackend(), MemoryPushBackend())
 
 
 @pytest.fixture
-async def client(app) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+def outbox(job_context) -> list:
+    return job_context.email.outbox
+
+
+class DrainingClient(AsyncClient):
+    """Runs the worker after every request, so emails and pushes arrive like in production.
+
+    Jobs exist only if the request committed, so a rolled-back request leaves ``outbox``
+    empty. Tests that need to look at the queue itself use a plain ``AsyncClient``.
+    """
+
+    job_context: JobContext
+
+    async def request(self, *args, **kwargs):
+        response = await super().request(*args, **kwargs)
+        # The probes also run against deliberately broken schemas.
+        if str(response.request.url.path) not in {"/health", "/ready"}:
+            await drain(self.job_context)
+        return response
+
+
+@pytest.fixture
+async def client(app, job_context) -> AsyncIterator[AsyncClient]:
+    async with DrainingClient(
+        transport=ASGITransport(app=app), base_url="http://localhost"
+    ) as client:
+        client.job_context = job_context
         yield client
 
 
