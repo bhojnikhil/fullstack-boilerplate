@@ -11,7 +11,7 @@ export interface AuthTokens {
 }
 
 export interface TokenStorage {
-  /** Both tokens, or null if there is no (readable) session. */
+  /** Both tokens, or null if there is no readable session. Never writes. */
   getTokens(): Promise<AuthTokens | null>;
   setTokens(tokens: AuthTokens): Promise<void>;
   clearTokens(): Promise<void>;
@@ -79,11 +79,11 @@ export function createTokenStorage(store: SecureStoreLike = SecureStore): TokenS
   return {
     async getTokens() {
       const raw = await store.getItemAsync(SESSION_KEY, SECURE_STORE_OPTIONS);
-      if (raw === null) return null;
-      const tokens = parseSession(raw);
-      // Unreadable data (corrupt or from an unknown format) is unusable.
-      if (!tokens) await clearTokens();
-      return tokens;
+      // An unreadable record (corrupt, or an unknown format) means signed out.
+      // It is left in place, not deleted: a delete here could race with a
+      // concurrent setTokens() and remove the fresh session. The next
+      // setTokens() or clearTokens() replaces it.
+      return raw === null ? null : parseSession(raw);
     },
 
     async setTokens(tokens) {

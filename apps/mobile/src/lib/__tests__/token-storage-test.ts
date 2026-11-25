@@ -91,11 +91,43 @@ describe("token storage", () => {
     JSON.stringify({ v: 1, accessToken: "a" }),
     JSON.stringify({ v: 1, accessToken: "", refreshToken: "r" }),
     JSON.stringify({ v: 2, accessToken: "a", refreshToken: "r" }),
-  ])("treats an unreadable entry as signed out and removes it: %s", async (raw) => {
+  ])(
+    "treats an unreadable entry as signed out without deleting it: %s",
+    async (raw) => {
+      const store = fakeSecureStore();
+      store.data.set(SESSION_KEY, raw);
+      await expect(createTokenStorage(store).getTokens()).resolves.toBeNull();
+      expect(store.deleteItemAsync).not.toHaveBeenCalled();
+      expect(store.data.get(SESSION_KEY)).toBe(raw);
+    },
+  );
+
+  it("never deletes a session written while an unreadable one was being read (R2-6)", async () => {
     const store = fakeSecureStore();
-    store.data.set(SESSION_KEY, raw);
-    await expect(createTokenStorage(store).getTokens()).resolves.toBeNull();
-    expect(store.data.size).toBe(0);
+    store.data.set(SESSION_KEY, "corrupt");
+    const storage = createTokenStorage(store);
+
+    // The read sees the corrupt record; a sign-in writes before it settles.
+    let releaseRead!: () => void;
+    store.getItemAsync.mockImplementationOnce(async (key: string) => {
+      const value = store.data.get(key) ?? null;
+      await new Promise<void>((resolve) => (releaseRead = resolve));
+      return value;
+    });
+    const read = storage.getTokens();
+    await storage.setTokens(TOKENS);
+    releaseRead();
+
+    await expect(read).resolves.toBeNull();
+    await expect(storage.getTokens()).resolves.toEqual(TOKENS);
+  });
+
+  it("an unreadable entry is replaced by the next sign-in", async () => {
+    const store = fakeSecureStore();
+    store.data.set(SESSION_KEY, "corrupt");
+    const storage = createTokenStorage(store);
+    await storage.setTokens(TOKENS);
+    await expect(storage.getTokens()).resolves.toEqual(TOKENS);
   });
 
   it.each([
