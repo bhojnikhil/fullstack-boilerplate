@@ -41,6 +41,13 @@ services:
   # rebuild to pick up changes (`docker compose up -d --build web`), or use
   # `make dev` for hot reload (web dev server on the host).
   web:
+    env_file:
+      - path: apps/web/.env.local
+        required: false
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
     build:
       # Repository root: the pnpm workspace and lockfile live there.
       context: .

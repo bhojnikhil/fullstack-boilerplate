@@ -1,4 +1,4 @@
-# 0005. Mobile styling: StyleSheet + typed design tokens
+# 0006. Mobile styling: StyleSheet + typed design tokens
 
 - Status: Accepted
 - Date: 2026-11-24

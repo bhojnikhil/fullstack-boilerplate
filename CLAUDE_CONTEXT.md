@@ -1,8 +1,8 @@
 # {{APP_NAME}} Full-Stack Boilerplate Context
 
 The [README](README.md) lists the current auth limitations and local setup commands.
-The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 15,
-React 19, axios and Zustand.
+The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 16,
+React 19, Tailwind CSS 4, shadcn/ui, axios and Zustand.
 
 ## Layout
 
@@ -20,7 +20,7 @@ apps/mobile/             Expo SDK 58 app (foundation: placeholder screens, no AP
   src/app/               Expo Router routes: (auth) sign-in/sign-up, (app) items/settings tabs
   src/components/        Screen (safe areas), KeyboardAvoidingForm, TextField, Button, NetworkBanner
   src/lib/               runtime env, persisted query cache, network, token storage, API headers
-  src/theme/             design tokens + useTheme (ADR 0005)
+  src/theme/             design tokens + useTheme (ADR 0006)
 packages/config/         shared TypeScript, ESLint and Prettier config
 docs/adr/                architecture decisions
 scripts/                 template customization and container checks
@@ -84,7 +84,7 @@ README.md "Mobile" has the run/build instructions and env vars. Conventions:
 - Routes live in `src/app/` only; put components/hooks/libs elsewhere. Tests must not be
   inside `src/app/` (Expo Router would treat them as routes): use `__tests__/` and the
   `*-test.ts[x]` naming.
-- Style with `useTheme()` tokens (ADR 0005); no hard-coded colors. Pad screens with
+- Style with `useTheme()` tokens (ADR 0006); no hard-coded colors. Pad screens with
   `<Screen edges={...}>` (edge-to-edge on Android); wrap forms in `KeyboardAvoidingForm`.
 - Build-time config comes from env in `app.config.ts`; runtime code reads it through
   `getRuntimeEnv()` (`src/lib/env.ts`), never `process.env`. Validation errors must not
@@ -106,9 +106,11 @@ make dev                          # Compose Postgres + API, Next.js dev server o
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
 make build-web                    # production Next.js build
+make smoke                        # packaged API and web, migrations and production probes
+pnpm --filter web test            # Vitest and React Testing Library
+pnpm --filter web test:e2e        # public web smoke with Playwright Chromium
 make mobile                       # Expo dev server for apps/mobile
 make test-mobile doctor-mobile    # mobile Jest tests, expo-doctor
-make smoke                        # packaged API in production mode, migrations and probes
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres

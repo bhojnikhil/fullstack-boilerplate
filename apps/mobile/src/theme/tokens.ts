@@ -1,6 +1,6 @@
 /**
  * Design tokens (light + dark). Plain values consumed through `useTheme()` and
- * React Native StyleSheet; see docs/adr/0005-mobile-styling.md.
+ * React Native StyleSheet; see docs/adr/0006-mobile-styling.md.
  *
  * The palette mirrors the neutral (zinc) scale that shadcn/ui uses on the web,
  * so both apps share the same vocabulary: background/surface/text/muted/

@@ -43,6 +43,14 @@ if ! [[ "$PROJECT_NAME" =~ ^[a-z0-9_-]+$ ]]; then
     exit 1
 fi
 
+# Keep the display name literal in both Next.js and Compose dotenv files.
+case "$APP_NAME" in
+    *'\'*|*'"'*|*'$'*|*'`'*|*$'\n'*|*$'\r'*)
+        printf '%bError: APP_NAME cannot contain backslashes, double quotes, dollar signs, backticks, or line breaks.%b\n' "$RED" "$NC" >&2
+        exit 1
+        ;;
+esac
+
 # Run from the repository root regardless of the caller's working directory.
 cd "$(dirname "$0")/.."
 
@@ -71,8 +79,8 @@ while IFS= read -r -d '' file; do
     if grep -qE '\{\{(PROJECT_NAME|APP_NAME|DOMAIN)\}\}' "$file"; then
         sed_inplace \
             -e "s|{{PROJECT_NAME}}|${PROJECT_ESC}|g" \
-            -e "s|{{APP_NAME}}|${APP_ESC}|g" \
             -e "s|{{DOMAIN}}|${DOMAIN_ESC}|g" \
+            -e "s|{{APP_NAME}}|${APP_ESC}|g" \
             "$file"
         echo "  updated ${file#./}"
         count=$((count + 1))
@@ -80,7 +88,7 @@ while IFS= read -r -d '' file; do
 done < <(
     find . \
         \( -name .git -o -name node_modules -o -name .venv -o -name venv \
-           -o -name .next -o -name .turbo -o -name dist -o -name build -o -name __pycache__ \
+           -o -name .next -o -name .tmp -o -name .turbo -o -name dist -o -name build -o -name __pycache__ \
            -o -name .mypy_cache -o -name .ruff_cache -o -name .pytest_cache \) -prune \
         -o -type f \
         \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
@@ -111,4 +119,4 @@ printf "${GREEN}✓ Done.${NC}\n\n"
 echo "Next steps:"
 echo "  1. Review apps/api/.env and apps/web/.env.local"
 echo "  2. make up            # postgres, api, web"
-echo "  3. Open http://localhost:3000/auth/register to create a user"
+echo "  3. Open http://localhost:3000/privacy to see your configured app name and domain"

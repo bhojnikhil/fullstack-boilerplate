@@ -12,9 +12,8 @@
     "./eslint/expo": "./eslint/expo.js"
   },
   "dependencies": {
-    "@eslint/eslintrc": "3.3.7",
     "eslint-config-expo": "58.0.4",
-    "eslint-config-next": "15.5.29"
+    "eslint-config-next": "16.4.6"
   },
   "peerDependencies": {
     "eslint": "^9.0.0",

@@ -124,7 +124,7 @@ function check(key: string, value: string, re: RegExp, expected: string): string
 
 /**
  * True when EAS evaluates the config: EAS Build workers set EAS_BUILD, and
- * EAS CLI (checked in eas-cli 27.11) sets EXPO_NO_DOTENV=1 every time it
+ * EAS CLI (checked in eas-cli 27.10) sets EXPO_NO_DOTENV=1 every time it
  * evaluates the app config. There, nothing silently falls back to the
  * development variant.
  */

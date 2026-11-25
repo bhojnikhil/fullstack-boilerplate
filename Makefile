@@ -68,7 +68,7 @@ fresh: ## Full reset: stop, delete the database volume, rebuild, start
 	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
 
 smoke: export COMPOSE_FILE ?= docker-compose.yml:docker-compose.smoke.yml
-smoke: ## Check the packaged containers and production API configuration
+smoke: ## Check the packaged containers, production API and public web pages
 	@set -eu; \
 	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
 	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres api web; \
@@ -78,6 +78,7 @@ smoke: ## Check the packaged containers and production API configuration
 	$(COMPOSE) run --rm --no-deps api alembic upgrade head; \
 	$(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; \
 	./scripts/check-production-api.sh; \
+	./scripts/check-production-web.sh; \
 	./scripts/check-containers.sh api web
 	@printf "$(GREEN)✓ postgres, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
 

@@ -1,4 +1,4 @@
-# 0006. Mobile toolchain versions: TypeScript 6, ESLint 9, pinned eas-cli
+# 0007. Mobile toolchain versions: TypeScript 6, ESLint 9, pinned eas-cli
 
 - Status: Accepted
 - Date: 2026-11-24
@@ -20,11 +20,14 @@ latest releases were TypeScript 7.0.2, ESLint 10.15.0 and eas-cli 27.11.0, while
   7.37.5 (peer up to `^9.7`). Neither declares ESLint 10 support. The shared
   `@repo/config` (peer `eslint ^9`) and `eslint-config-next` 15 for the web app are in
   the same position, so the workspace stays on one ESLint major.
-- **eas-cli 27.11.0 as an exact devDependency of the workspace root**, run with
+- **eas-cli 27.10.0 as an exact devDependency of the workspace root**, run with
   `pnpm exec eas` from `apps/mobile` (pnpm resolves the root's binaries), and `eas.json`
   `cli.version` set to the same version. Not a dependency of `apps/mobile` itself:
   expo-doctor fails the app if eas-cli is in its package.json ("Check for legacy global
-  CLI installed locally"). Docs don't use `npx eas-cli@latest`. Its install scripts that pnpm would run are denied in
+  CLI installed locally"). Docs don't use `npx eas-cli@latest`. It is 27.10.0 rather
+  than the latest 27.11.0 because the workspace's `minimumReleaseAge` (7 days, see
+  `pnpm-workspace.yaml`) rejects releases younger than a week. For the same reason the
+  TanStack Query packages are 5.108.0, not 5.108.4. Its install scripts that pnpm would run are denied in
   `pnpm-workspace.yaml` (`dtrace-provider`, an optional native addon of its logger, and
   `protobufjs`'s version notice).
 

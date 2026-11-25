@@ -1,103 +1,72 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 }
 
-html,
-body {
-  width: 100%;
-  height: 100%;
+:root {
+  --background: #f9faf8;
+  --foreground: #172923;
+  --card: #fff;
+  --primary: #18513f;
+  --primary-foreground: #fff;
+  --secondary: #e4eee8;
+  --secondary-foreground: #194536;
+  --muted-foreground: #50665b;
+  --accent: #dcebe3;
+  --accent-foreground: #194536;
+  --destructive: #a32732;
+  --border: #d4e0d9;
+  --input: #84988d;
+  --ring: #22654e;
 }
 
-body {
-  background-color: #f9fafb;
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu",
-    "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-  color: #1f2937;
+.dark {
+  --background: #111a17;
+  --foreground: #eff8f2;
+  --card: #192722;
+  --primary: #a0dfc2;
+  --primary-foreground: #132e23;
+  --secondary: #263d33;
+  --secondary-foreground: #d5efe1;
+  --muted-foreground: #a9c1b4;
+  --accent: #324a40;
+  --accent-foreground: #eff8f2;
+  --destructive: #ffa2a6;
+  --border: #344d40;
+  --input: #789488;
+  --ring: #a0dfc2;
 }
 
-a {
-  color: #2563eb;
-  text-decoration: none;
-}
+@layer base {
+  * {
+    @apply border-border;
+  }
 
-a:hover {
-  text-decoration: underline;
-}
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
 
-button {
-  cursor: pointer;
-  border: none;
-  font-size: 1rem;
-}
+  button:not(:disabled) {
+    @apply cursor-pointer;
+  }
 
-input {
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  padding: 0.5rem;
-  font-size: 1rem;
-}
-
-input:focus {
-  outline: none;
-  border-color: #2563eb;
-}
-
-.container {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 1rem;
-}
-
-.header {
-  background-color: white;
-  border-bottom: 1px solid #e5e7eb;
-  padding: 1rem 0;
-}
-
-.main {
-  padding: 2rem 0;
-}
-
-.card {
-  background-color: white;
-  border-radius: 0.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 1.5rem;
-}
-
-.button {
-  background-color: #2563eb;
-  color: white;
-  padding: 0.5rem 1rem;
-  border-radius: 0.375rem;
-  font-weight: 500;
-  transition: background-color 0.2s;
-}
-
-.button:hover {
-  background-color: #1d4ed8;
-}
-
-.button-secondary {
-  background-color: #e5e7eb;
-  color: #1f2937;
-}
-
-.button-secondary:hover {
-  background-color: #d1d5db;
-}
-
-.error {
-  color: #dc2626;
-  font-size: 0.875rem;
-}
-
-.success {
-  color: #059669;
-  font-size: 0.875rem;
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
 }
