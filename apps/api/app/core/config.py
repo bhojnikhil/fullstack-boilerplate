@@ -116,7 +116,7 @@ class Settings(DatabaseSettings):
     resend_api_key: SecretStr = SecretStr("")
     resend_timeout_seconds: float = Field(default=10, gt=0, le=60)
 
-    # Background jobs (the worker process; see docs/adr/0011-postgres-job-queue.md).
+    # Background jobs (the worker process; see docs/adr/0012-postgres-job-queue.md).
     job_poll_interval_seconds: float = Field(default=2, gt=0, le=60)
     worker_concurrency: int = Field(default=4, ge=1, le=64)
     # A job claimed longer ago than this is presumed lost with its worker and is re-run.

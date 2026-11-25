@@ -45,13 +45,13 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - Email through a small provider interface: console (development), SMTP, Resend, and an
   in-memory backend for tests. Compose runs [Mailpit](https://mailpit.axllent.org/) to
   view messages locally.
-- Background jobs ([ADR 0011](docs/adr/0011-postgres-job-queue.md)): a Postgres job table
+- Background jobs ([ADR 0012](docs/adr/0012-postgres-job-queue.md)): a Postgres job table
   (`FOR UPDATE SKIP LOCKED`) with retries and backoff, run by a separate worker
   (`python -m app.jobs`, the `worker` Compose service). Emails are enqueued in the
   request's transaction, so a rolled-back request sends nothing. Periodic jobs process push
   receipts (15 min) and purge expired sessions, refresh tokens, emailed tokens, idempotency
   records, rate-limit rows and old dead jobs (hourly).
-- Push ([ADR 0012](docs/adr/0012-push-storage-version-gate-sentry.md)): `POST`/`DELETE
+- Push ([ADR 0013](docs/adr/0013-push-storage-version-gate-sentry.md)): `POST`/`DELETE
   /v1/devices` register and remove Expo push tokens; jobs send through the Expo Push API
   and prune tokens that receipts report as `DeviceNotRegistered`.
 - S3-compatible storage interface (S3, R2, MinIO) with presigned upload/download URLs and
@@ -139,7 +139,6 @@ the API yet: no sign-in, no data.
     its own step.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
-- `.pre-commit-config.yaml` is included but not run in CI.
 
 ## Quick start (Docker)
 
@@ -149,7 +148,7 @@ Prerequisites: Docker with Compose v2 (`docker compose`), Make, Git, OpenSSL.
 git clone https://github.com/bhojnikhil/fullstack-boilerplate myapp
 cd myapp
 
-# Fill in the remaining template placeholders (currently the app display name)
+# Fill in template placeholders
 # and create apps/api/.env (with a generated SECRET_KEY) and apps/web/.env.local.
 ./scripts/customize.sh myapp "My App" myapp.com
 
@@ -172,6 +171,38 @@ Compose publishes Postgres, the API, the web app and Mailpit on IPv4 loopback
 (`127.0.0.1`) only, on host ports 5432, 8000, 3000, 8025 (Mailpit UI) and 1025 (Mailpit
 SMTP) by default. Set `POSTGRES_PORT`, `API_PORT`, `WEB_PORT`, `MAILPIT_UI_PORT` and
 `MAILPIT_SMTP_PORT` on the command line if those ports are in use.
+
+### Customizing project identity
+
+```bash
+./scripts/customize.sh myapp \
+  --display-name "My App" \
+  --domain myapp.com \
+  --android-package com.myapp.android \
+  --ios-bundle-id com.myapp.ios \
+  --deep-link-scheme myapp
+```
+
+The script substitutes template markers written as a name inside double braces.
+The names are `PROJECT_NAME`, `DISPLAY_NAME` (also `APP_NAME`), `DOMAIN`,
+`ANDROID_PACKAGE`, `IOS_BUNDLE_ID`, and `DEEP_LINK_SCHEME`. Substitution is literal,
+so place display-name markers where the resulting text is valid for the file format.
+The positional form in the quick start still works. The domain defaults to
+`localhost`. Mobile IDs default to `com.example.<project>` with hyphens and
+underscores removed from the project name and an `app` prefix if needed for
+a valid identifier. The default scheme uses the project name with underscores
+turned into hyphens and an `app-` prefix if it would start with a nonletter.
+Display names must omit backslashes, double quotes, dollar signs, and backticks
+so they remain literal in the web and mobile env files.
+
+Package names in the lockfiles remain fixed. The script creates missing local
+env files from their corresponding `.env.example` files. For the API it
+generates a `SECRET_KEY` in `apps/api/.env` and keeps the secret marker in
+`apps/api/.env.example`. For the web and optional mobile app it creates
+`.env.local`. The mobile file receives the identity values in its existing
+configuration variables. Existing local env files are preserved. The script
+can be rerun safely and works without `apps/mobile`. Run
+`./scripts/test-customize.sh` to exercise both layouts on fixtures.
 
 ## Upgrading an existing checkout
 
@@ -370,6 +401,7 @@ by its users, so none of them may be secret. EAS CLI does **not** read `.env`; s
 ```bash
 make help                      # list all targets
 make setup                     # install locked Python + JS dependencies
+make hooks                     # install the Git pre-commit hook
 make up / make down            # start / stop the Docker stack
 make ps / make logs            # status (including health) / follow logs
 make dev                       # api in Docker + web dev server with hot reload
@@ -388,6 +420,53 @@ make db-shell                  # psql into the dev database
 make fresh                     # wipe the DB volume, rebuild, start
 make smoke                     # packaged containers, health and production API/web checks
 ```
+
+## Security checks
+
+Security checks run on PRs, pushes to `main`, and Mondays at 06:23 UTC.
+The jobs use SHA-pinned Actions and read-only contents access.
+[`security.yml`](.github/workflows/security.yml) · [ADR 0011](docs/adr/0011-security-checks.md)
+
+| Check | Coverage and failure condition |
+| --- | --- |
+| Gitleaks | Scans PR commits from the base SHA to the head SHA. On `main` pushes and the weekly run, scans the full fetched history across branches and tags. Reports matches with secret values redacted. |
+| GitHub Dependency Review | Runs on PRs and fails on newly introduced known vulnerabilities at low severity or higher in the dependency graph. Requires the repository's **Dependency graph** setting. |
+| pip-audit | Exports exact versions and hashes from `apps/api/uv.lock`, including development groups. Fails on known vulnerabilities reported for the export by the advisory service. |
+| pnpm audit | Audits the workspace lockfile's production dependencies and fails on high or critical advisories. |
+
+Dependency Review needs the repository's dependency graph. Enable it in
+**Settings → Advanced Security → Dependency Graph**, then rerun the job. If the
+dependency graph API returns 403 or 404, the job reports a warning and skips
+the review. Other API errors still fail the job.
+
+To scan history locally with Gitleaks 8.30.1 installed, fetch `origin` and run
+`gitleaks git --redact --log-opts="--diff-merges=first-parent --remotes=origin --tags HEAD" .`.
+For a confirmed credential exposure, revoke or rotate the credential and
+remove it from current code. Review the affected commit range before deciding
+how to clean up published history.
+
+## Pre-commit
+
+Install the repository's pinned tools (uv and pnpm are listed under Host
+development), then enable the hook from the repository root.
+
+```bash
+make setup
+uv tool install pre-commit==4.7.0
+make hooks
+pre-commit run --all-files
+```
+
+Ruff check and format use the API lockfile, as does mypy. Prettier formats staged
+files in the JS workspaces, and ESLint runs workspace lint scripts through
+Turborepo. The hooks also check YAML, JSON, large files and private keys, fix
+trailing whitespace and missing final newlines, and scan staged changes with
+Gitleaks. Pre-commit provisions the Gitleaks hook's Go environment if needed.
+Review and re-stage any fixes before committing.
+
+CI runs `pre-commit run --all-files` on PRs and pushes to `main`. Gitleaks'
+hook reads the Git index diff, so the Security workflow scans committed changes
+in CI. [`pre-commit.yml`](.github/workflows/pre-commit.yml)
 
 ## Authentication
 

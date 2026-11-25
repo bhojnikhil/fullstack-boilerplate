@@ -26,7 +26,7 @@ RECEIPT_RETENTION = timedelta(hours=24)
 # A send that fails for some devices is retried for those devices only, this many times.
 MAX_PUSH_ATTEMPTS = 5
 
-# Job payloads sit in the database until delivered (docs/adr/0011), so push content is
+# Job payloads sit in the database until delivered (docs/adr/0012), so push content is
 # restricted to what a deep link needs: a few known keys with short scalar values.
 ALLOWED_DATA_KEYS = frozenset({"type", "screen", "id", "url"})
 MAX_TITLE = 100
@@ -63,7 +63,7 @@ async def register_device(
     A token that another user registered moves to the caller: the previous owner's row is
     deleted (never duplicated), so they stop receiving, and the move is audited. Two people
     sharing a phone (sign-out, sign-in) need this; the token identifies a device and is
-    not a credential (docs/adr/0012).
+    not a credential (docs/adr/0013).
     """
     previous_owner = await db.scalar(
         delete(Device)
