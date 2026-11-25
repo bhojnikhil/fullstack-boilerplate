@@ -482,7 +482,8 @@ async def test_logout_revokes_the_session_immediately(client, session_factory, t
     headers = {"Authorization": f"Bearer {body['access_token']}"}
     response = await client.post("/v1/auth/logout", headers=headers)
     assert response.status_code == 204
-    assert cookies(response)[REFRESH_COOKIE]["max-age"] == "0"
+    # A different tab may have replaced the shared refresh cookie.
+    assert "set-cookie" not in response.headers
 
     assert_error(await client.get("/v1/me", headers=headers), 401, "invalid_token")
     refresh = await client.post("/v1/auth/refresh", json={"refresh_token": body["refresh_token"]})

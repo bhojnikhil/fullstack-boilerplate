@@ -533,3 +533,39 @@ async def test_google_sign_in_rechecks_link_after_waiting_for_user_lock(
         ).status_code == 204
         resume.set()
         assert_error(await pending, 409, "google_link_required")
+
+
+async def test_unlinked_identity_blocks_automatic_replacement(client, google, auth_headers):
+    token = google.issue(subject="old", email="test@example.com")
+    assert (
+        await client.post("/v1/auth/google/link", json={"id_token": token}, headers=auth_headers)
+    ).status_code == 204
+    assert (await client.delete("/v1/auth/google/link", headers=auth_headers)).status_code == 204
+    replacement = google.issue(subject="new", email="test@example.com")
+    assert_error(await google_sign_in(client, replacement), 409, "google_link_required")
+    assert_error(await google_sign_in(client, token), 409, "google_link_required")
+    assert (
+        await client.post(
+            "/v1/auth/google/link", json={"id_token": replacement}, headers=auth_headers
+        )
+    ).status_code == 204
+
+
+async def test_explicit_google_link_is_rate_limited(client, google, auth_headers, monkeypatch):
+    from datetime import timedelta
+
+    from app.core.ratelimit import Rule
+    from app.modules.auth import limits
+
+    monkeypatch.setattr(
+        limits, "GOOGLE_LINK_PER_IP", Rule("test_google_link_ip", 1, timedelta(hours=1))
+    )
+    token = google.issue()
+    assert (
+        await client.post("/v1/auth/google/link", json={"id_token": token}, headers=auth_headers)
+    ).status_code == 204
+    assert_error(
+        await client.post("/v1/auth/google/link", json={"id_token": token}, headers=auth_headers),
+        429,
+        "rate_limited",
+    )

@@ -63,11 +63,8 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   logout: async () => {
-    try {
-      await api.logout();
-    } finally {
-      set({ user: null });
-    }
+    await api.logout();
+    set({ user: null });
   },
 
   restoreSession: async () => {

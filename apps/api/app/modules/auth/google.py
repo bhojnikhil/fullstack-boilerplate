@@ -183,6 +183,8 @@ class GoogleService:
         else:
             current = await self.accounts.get_for_user(user.id, GOOGLE)
             if current is not None:
+                if automatic and current.state == OAuthLinkState.UNLINKED:
+                    raise self.fail(ErrorCode.GOOGLE_LINK_REQUIRED, "identity_unlinked", user)
                 if current.state == OAuthLinkState.LINKED:
                     raise DomainError(ErrorCode.GOOGLE_ALREADY_LINKED)
                 await self.accounts.delete(current)
@@ -206,6 +208,8 @@ class GoogleService:
         return user
 
     async def link_to_current_user(self, context: AuthContext, id_token: str) -> None:
+        await self.auth.limiter.hit(limits.GOOGLE_LINK_PER_IP, self.auth.client.ip)
+        await self.auth.limiter.hit(limits.GOOGLE_LINK_PER_ACCOUNT, str(context.user.id))
         require_recent_authentication(context.session, self.config)
         user = await self.locked_user(context)
         if user.email_verified_at is None:

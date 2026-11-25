@@ -37,7 +37,8 @@ email addresses or IPs; digests stand in where correlation helps.
 before account-dependent work in a background task. Registration always hashes the
 submitted password. Unverified accounts cannot sign in, link credentials or change their
 email. Registration stores the pending password hash with a verification token; a later
-registration replaces it. Verification requires both the link and the chosen password,
+registration replaces it. This permits rate-limited disruption of an unverified
+registration; the owner can register again to obtain a fresh link. Verification requires both the link and the chosen password,
 so opening a link from an attacker’s registration cannot activate their credential.
 Claiming an unverified account also removes existing sessions, provider links and tokens.
 Password reset proves inbox ownership and performs the same cleanup. Legacy bcrypt and
