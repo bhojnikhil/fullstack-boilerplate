@@ -101,7 +101,7 @@ jobs:
         run: pnpm turbo run lint typecheck build
 
       - name: Unit tests (Vitest)
-        run: pnpm --filter web test
+        run: pnpm turbo run test --filter=web --filter=@repo/api-client
 
       - name: Install Chromium and system dependencies
         run: pnpm --filter web exec playwright install --with-deps chromium

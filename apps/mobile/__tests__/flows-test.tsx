@@ -62,8 +62,9 @@ describe("auth flow", () => {
       email: "ada@example.com",
       password: "correct horse battery",
     });
-    // The sign-up call carried an Idempotency-Key; nothing was stored as a session.
-    expect(register?.headers.get("Idempotency-Key")).toBeTruthy();
+    // The shared client sends no Idempotency-Key on auth endpoints; nothing was
+    // stored as a session.
+    expect(register?.headers.get("Idempotency-Key")).toBeNull();
     expect(harness.storage.current()).toBeNull();
   });
 

@@ -4,7 +4,7 @@
 
 The mobile app signs in with a bearer access token plus a rotating refresh token
 ([ADR 0008](0008-auth-tokens-and-sessions.md)), shares the transport in
-`packages/api-client` ([ADR 0011](0011-api-client.md)), and must keep working offline for
+`packages/api-client` ([ADR 0012](0012-api-client.md)), and must keep working offline for
 item creates and edits. The foundation already fixed three rules: tokens live in one
 SecureStore record, the query cache is persisted only for queries that opt in, and
 mutations are never persisted.

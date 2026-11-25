@@ -15,6 +15,9 @@ jest.mock("@react-native-community/netinfo", () =>
   jest.requireActual("@react-native-community/netinfo/jest/netinfo-mock.js"),
 );
 
+// The Sentry native SDK has no JS implementation in Jest (and ships ESM).
+jest.mock("@sentry/react-native", () => ({ init: jest.fn() }));
+
 // Constants.expoConfig as the app sees it at runtime: the real app.config.ts
 // evaluated with an explicitly clean environment (the development defaults).
 jest.mock("expo-constants", () => {

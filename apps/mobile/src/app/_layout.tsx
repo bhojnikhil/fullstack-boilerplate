@@ -5,9 +5,14 @@ import { ActivityIndicator, View } from "react-native";
 import { NetworkStatusBoundary } from "@/components/network-banner";
 import { UpdateRequiredScreen } from "@/components/update-required";
 import { AppLockGate } from "@/features/lock/app-lock";
+import { getRuntimeEnv } from "@/lib/env";
+import { initSentry } from "@/lib/sentry";
 import { SessionGate } from "@/providers/session-gate";
 import { ServicesProvider, useSession, useUpdateRequired } from "@/providers/services";
 import { toNavigationTheme, useTheme } from "@/theme/use-theme";
+
+// No-op unless SENTRY_DSN was set when the app was built.
+initSentry(getRuntimeEnv());
 
 function RootStack() {
   const { status } = useSession();

@@ -27,6 +27,20 @@ export interface ClientOptions {
   onRefreshFailed?: () => void;
 }
 
+function secureUuid(): string {
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (!crypto?.getRandomValues)
+    throw new Error(
+      "A secure random number generator is required to create request IDs and idempotency keys",
+    );
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /** Shared transport. A retry retains its original body and idempotency key. */
 export function createApiClient(options: ClientOptions) {
   let refreshing: Promise<boolean> | null = null;
@@ -37,32 +51,29 @@ export function createApiClient(options: ClientOptions) {
     const set = (name: string, value: string | null | undefined) => {
       if (value && !headers.has(name)) headers.set(name, value);
     };
-    set(
-      "Authorization",
-      options.getAccessToken?.() ? `Bearer ${options.getAccessToken!()}` : null,
-    );
+    const callerAuthorization = headers.has("Authorization");
+    const accessToken = options.getAccessToken?.();
+    set("Authorization", accessToken ? `Bearer ${accessToken}` : null);
+    const authPath = /(?:^|\/)v1\/auth(?:\/|$)/.test(new URL(request.url).pathname);
     set("X-Workspace-Id", options.getWorkspaceId?.());
     set("X-App-Version", options.appVersion);
     set("X-Platform", options.platform);
-    set("X-Request-Id", options.requestId?.() ?? globalThis.crypto.randomUUID());
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method))
-      set(
-        "Idempotency-Key",
-        options.idempotencyKey?.() ?? globalThis.crypto.randomUUID(),
-      );
+    if (!headers.has("X-Request-Id"))
+      set("X-Request-Id", options.requestId?.() ?? secureUuid());
+    if (
+      !authPath &&
+      !headers.has("Idempotency-Key") &&
+      !["GET", "HEAD", "OPTIONS"].includes(request.method)
+    )
+      set("Idempotency-Key", options.idempotencyKey?.() ?? secureUuid());
     const prepared = new Request(request, {
       headers,
       credentials: options.credentials,
     });
     const send = options.fetch ?? globalThis.fetch;
     const response = await send(prepared.clone());
-    if (
-      response.status !== 401 ||
-      !options.refresh ||
-      new URL(request.url).pathname.startsWith("/v1/auth/")
-    )
+    if (response.status !== 401 || !options.refresh || callerAuthorization || authPath)
       return response;
-    if (!originalSession) return response;
     refreshing ??= options.refresh(originalSession).finally(() => {
       refreshing = null;
     });
@@ -71,10 +82,15 @@ export function createApiClient(options: ClientOptions) {
       options.onRefreshFailed?.();
       return response;
     }
-    if (originalSession !== (options.getSessionId?.() ?? null)) {
+    if (
+      originalSession !== null &&
+      originalSession !== (options.getSessionId?.() ?? null)
+    ) {
+      await response.body?.cancel();
       options.onSessionChanged?.();
       throw new SessionChangedError();
     }
+    await response.body?.cancel();
     const retryHeaders = new Headers(prepared.headers);
     const token = options.getAccessToken?.();
     if (token) retryHeaders.set("Authorization", `Bearer ${token}`);
