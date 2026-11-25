@@ -37,3 +37,27 @@ def test_stdlib_logs_render_and_redact_nested_exceptions(name, capsys, env):
         stacks = error["exception"]
     assert stacks[0]["exceptions"][0][0]["exc_type"] == "ValueError"
     assert "private" not in output
+
+
+def test_traceback_redaction_keeps_only_allowlisted_fields():
+    from app.core.logging import redact_tracebacks
+
+    stacks = [
+        {
+            "exc_type": "ValueError",
+            "exc_value": "private message",
+            "exc_notes": ["private note"],
+            "syntax_error": "private source",
+            "is_cause": False,
+            "is_group": True,
+            "future_field": "private value",
+            "frames": [
+                {"filename": "app.py", "lineno": 3, "name": "f", "locals": {"password": "private"}}
+            ],
+            "exceptions": [[{"exc_type": "KeyError", "exc_value": "private nested", "frames": []}]],
+        }
+    ]
+    redacted = redact_tracebacks(stacks)
+    assert "private" not in json.dumps(redacted)
+    assert redacted[0]["frames"] == [{"filename": "app.py", "lineno": 3, "name": "f"}]
+    assert redacted[0]["exceptions"][0][0]["exc_type"] == "KeyError"

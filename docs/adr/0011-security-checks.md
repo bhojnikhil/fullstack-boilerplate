@@ -1,4 +1,4 @@
-# ADR 0005: Security scans and shared pre-commit checks
+# ADR 0011: Security scans and shared pre-commit checks
 
 Status: Accepted
 

@@ -9,17 +9,18 @@ dependencies = [
     "alembic==1.20.1",
     # Held at 4.x: 5.x raises on passwords over 72 bytes (would surface as 500s).
     # bcrypt is replaced by argon2id in the auth redesign.
-    "bcrypt==4.3.0",
     "fastapi==0.165.0",
     "httpx==0.28.1",
     "psycopg[binary]==3.3.9",
     "pydantic[email]==2.14.4",
     "pydantic-settings==2.16.3",
-    "python-jose[cryptography]==3.5.0",
     "sqlalchemy==2.1.9",
     "uvicorn[standard]==0.54.0",
     "structlog==26.1.0",
     "greenlet==3.5.6",
+    "pwdlib[argon2,bcrypt]==0.4.2",
+    "pyjwt==2.15.1",
+    "google-auth==2.63.1",
 ]
 
 [dependency-groups]

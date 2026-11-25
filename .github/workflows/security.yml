@@ -55,7 +55,32 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check dependency graph availability
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          response="$RUNNER_TEMP/dependency-graph-response"
+          code=$(curl --silent --show-error --location --output "$response" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GH_REPO}/dependency-graph/sbom")
+          case "$code" in
+            200) echo "available=true" >> "$GITHUB_OUTPUT" ;;
+            403|404)
+              echo "::warning::Dependency graph API returned HTTP $code. Enable Dependency Graph in repository settings to run dependency review."
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Dependency graph API returned unexpected HTTP $code."
+              cat "$response"
+              exit 1
+              ;;
+          esac
+
       - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        if: steps.dependency-graph.outputs.available == 'true'
         with:
           fail-on-severity: low
           fail-on-scopes: runtime, development, unknown

@@ -11,7 +11,9 @@ API_DIR := apps/api
 POSTGRES_PORT ?= 5432
 API_PORT ?= 8000
 WEB_PORT ?= 3000
-export POSTGRES_PORT API_PORT WEB_PORT
+MAILPIT_UI_PORT ?= 8025
+MAILPIT_SMTP_PORT ?= 1025
+export POSTGRES_PORT API_PORT WEB_PORT MAILPIT_UI_PORT MAILPIT_SMTP_PORT
 NEXT_PUBLIC_API_URL ?= http://localhost:$(API_PORT)
 export NEXT_PUBLIC_API_URL
 
@@ -46,12 +48,13 @@ dev: migrate-compose ## postgres + api in Docker (hot reload), web dev server on
 
 # ============================== Docker ======================================
 
-up: migrate-compose ## Migrate the database, then start api and web in Docker
+up: migrate-compose ## Migrate the database, then start api, web and mailpit in Docker
 	$(COMPOSE) up -d
 	@printf "$(GREEN)✓ Services started$(NC)\n"
 	@echo "  Web:      http://localhost:$(WEB_PORT)"
 	@echo "  API:      http://localhost:$(API_PORT)"
 	@echo "  API docs: http://localhost:$(API_PORT)/docs"
+	@echo "  Mailpit:  http://localhost:$(MAILPIT_UI_PORT)"
 
 down: ## Stop all services
 	$(COMPOSE) down
@@ -75,7 +78,8 @@ smoke: export COMPOSE_FILE ?= docker-compose.yml:docker-compose.smoke.yml
 smoke: ## Check the packaged containers, production API and public web pages
 	@set -eu; \
 	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
-	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres api web; \
+	SMOKE_JWT_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_JWT_SECRET_KEY; \
+	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres mailpit api web; \
 	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && ! $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready 503; then \
 		echo "Expected HTTP 503 from /ready before migrations" >&2; exit 1; \
 	fi; \
@@ -84,7 +88,7 @@ smoke: ## Check the packaged containers, production API and public web pages
 	./scripts/check-production-api.sh; \
 	./scripts/check-production-web.sh; \
 	./scripts/check-containers.sh api web
-	@printf "$(GREEN)✓ postgres, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
+	@printf "$(GREEN)✓ postgres, mailpit, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 

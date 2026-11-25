@@ -71,11 +71,9 @@ done
 
 [[ "$display" =~ [^[:space:]] && "$display" != *$'\n'* && "$display" != *$'\r'* && "$display" != *'{{'* ]] \
     || die "Display name must be nonblank, on one line, and contain no template markers."
-# The display name lands in Next.js and Compose dotenv files (double-quoted) and in
-# Expo's dotenv: keep it literal in all of them.
 case "$display" in
     *'\'*|*'"'*|*'$'*|*'`'*)
-        die "Display name cannot contain backslashes, double quotes, dollar signs or backticks."
+        die "Display name cannot contain backslashes, double quotes, dollar signs, or backticks."
         ;;
 esac
 host_label='[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
@@ -135,12 +133,25 @@ done < <(
 )
 
 create_env() {
-    local template=$1 target=$2 secret
+    local template=$1 target=$2 secret mobile_domain
     [[ -f "$template" && ! -e "$target" && ! -L "$target" ]] || return 0
 
     if [[ "$target" == apps/api/.env ]] && grep -qF '{{GENERATE_SECRET_KEY}}' "$template"; then
         secret=$(openssl rand -hex 32)
         (umask 077; set -C; sed "s|{{GENERATE_SECRET_KEY}}|$secret|g" "$template" > "$target")
+    elif [[ "$target" == apps/mobile/.env.local ]]; then
+        mobile_domain=''
+        if [[ "$domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$ ]]; then
+            mobile_domain=$domain
+        fi
+        (umask 077; set -C; sed \
+            -e "s|^APP_NAME=$|APP_NAME=\"$display_escaped\"|" \
+            -e "s|^APP_SLUG=$|APP_SLUG=${project//_/-}|" \
+            -e "s|^ANDROID_PACKAGE=$|ANDROID_PACKAGE=$android_package|" \
+            -e "s|^IOS_BUNDLE_ID=$|IOS_BUNDLE_ID=$ios_bundle_id|" \
+            -e "s|^APP_SCHEME=$|APP_SCHEME=$deep_link_scheme|" \
+            -e "s|^APP_DOMAIN=$|APP_DOMAIN=$mobile_domain|" \
+            "$template" > "$target")
     else
         (umask 077; set -C; cat "$template" > "$target")
     fi
@@ -149,5 +160,4 @@ create_env() {
 
 create_env apps/api/.env.example apps/api/.env
 create_env apps/web/.env.example apps/web/.env.local
-# Expo CLI and app.config.ts read apps/mobile/.env (not .env.local).
-create_env apps/mobile/.env.example apps/mobile/.env
+create_env apps/mobile/.env.example apps/mobile/.env.local
