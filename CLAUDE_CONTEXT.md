@@ -92,7 +92,8 @@ README.md "Mobile" has the run/build instructions and env vars. Conventions:
 - Persisted query cache is opt-in: add `meta: { persist: true }` only to queries whose
   data may sit unencrypted on disk. Mutations are never persisted.
 - Run EAS CLI as `pnpm exec eas` (pinned root devDependency); never `npx eas-cli@latest`.
-  EAS CLI ignores `.env` (README "EAS builds and updates").
+  EAS CLI ignores `.env` (README "EAS builds and updates"). Publish updates only with
+  `pnpm release:update <preview|production>`, never a hand-typed `eas update`.
 - React Native Testing Library 14: `render`, `renderHook`, `rerender` and `fireEvent.*`
   return promises; always `await` them.
 

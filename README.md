@@ -278,7 +278,7 @@ by its users, so none of them may be secret. EAS CLI does **not** read `.env`; s
 | `IOS_BUNDLE_ID` | `com.example.boilerplate`; **required** for production | Letters, digits, `-` (no `_`). Same production rules. |
 | `APP_SCHEME` | `boilerplate` | Deep-link scheme (before the variant suffix). |
 | `APP_DOMAIN` | unset | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production. |
-| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. |
+| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
 | `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
 | `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
 
@@ -434,9 +434,11 @@ apps/mobile/
   "Discard" clears the input and completes the navigation. `(auth)` is anchored on
   sign-in, so opening `/sign-up` directly still has sign-in underneath it. Android's
   predictive back gesture is off (`predictiveBackGestureEnabled: false`).
-- **Keyboard.** `KeyboardAvoidingForm` uses `behavior="padding"` on both platforms
-  (Android windows no longer resize for the keyboard under edge-to-edge) and offsets by
-  the header height plus the offline banner's height while it is shown.
+- **Keyboard.** Android windows no longer resize for the keyboard under edge-to-edge,
+  so `KeyboardAvoidingForm` pads itself by however much the keyboard overlaps it. It
+  measures its own bottom edge in window coordinates against the keyboard's top edge,
+  so headers and the offline banner need no offset, and it recomputes on every keyboard
+  event and every layout change (e.g. the banner appearing while the keyboard is open).
 - **Accessibility.** Inputs are labelled, buttons have roles and disabled state, screen
   titles are headers, tabs have accessibility labels, buttons and inputs are at least
   48 dp tall. In light and dark, the color pairs the components draw together meet WCAG
@@ -447,7 +449,9 @@ apps/mobile/
   written, and mutations (whose variables can hold passwords) never are. The cache is
   scoped per account: `AppProviders` takes a `cacheScope` (account id, or signed out),
   each scope has its own storage entry, and other scopes' entries are deleted on
-  startup. `clearQueryCache()` is for sign-out (phase 9b). Queries pause offline and
+  startup. Sign-out (phase 9b) calls `useClearQueryCache()`: it stops the scope's writes
+  (including throttled writes still queued), waits for writes in flight, then clears
+  memory and deletes the entry, so nothing can recreate it. Queries pause offline and
   resume on reconnect; returning to the foreground refetches and re-checks
   connectivity.
 - **Offline banner.** Shown when NetInfo reports no connection or no internet access.
@@ -496,8 +500,10 @@ environment's variables. So:
   Under EAS, `APP_VARIANT` has no default, and `preview`/`production` refuse to
   evaluate without `API_URL`; production also needs real `ANDROID_PACKAGE` and
   `IOS_BUNDLE_ID`.
-- `eas init` can't edit a dynamic `app.config.ts`, so it prints the project id
-  instead; export it as `EAS_PROJECT_ID`.
+- `eas init` can't edit a dynamic `app.config.ts`: it creates the project, prints the
+  project id with a warning, and **exits non-zero** (eas-cli 27.10.0 throws after the
+  warning). Export the id as `EAS_PROJECT_ID`; `app.config.ts` then reports it, and
+  `eas init --id "$EAS_PROJECT_ID"` confirms the link and exits 0.
 
 First-time setup (needs an Expo account; none of this has been run for this repo):
 
@@ -505,10 +511,11 @@ First-time setup (needs an Expo account; none of this has been run for this repo
 cd apps/mobile
 pnpm exec eas login
 export APP_VARIANT=development          # preflight: EAS CLI reads only your shell
-pnpm exec eas init                      # creates the project and prints its id
+pnpm exec eas init                      # creates the project, prints its id, exits non-zero
 export EAS_PROJECT_ID=<printed id> EXPO_OWNER=<your Expo account>
+pnpm exec eas init --id "$EAS_PROJECT_ID"   # "Project already linked", exits 0
 
-# Source of truth for build workers and `eas update --environment`:
+# Source of truth for build workers and EAS Update:
 for env in development preview production; do
   pnpm exec eas env:set --environment "$env" --name APP_VARIANT --value "$env" --visibility plaintext
   pnpm exec eas env:set --environment "$env" --name EAS_PROJECT_ID --value "$EAS_PROJECT_ID" --visibility plaintext
@@ -518,18 +525,34 @@ pnpm exec eas env:set --environment preview --name API_URL --value https://api-p
 # production: API_URL, ANDROID_PACKAGE, IOS_BUNDLE_ID (and APP_DOMAIN / APP_LINK_PATHS if used)
 ```
 
-Building and publishing (keep `EAS_PROJECT_ID` / `EXPO_OWNER` exported, e.g. via your
-shell profile or direnv, and export the target variant's values):
+**Builds** (keep `EAS_PROJECT_ID` / `EXPO_OWNER` exported, e.g. via your shell profile or
+direnv, and export the target's values for the local evaluation). The worker builds from
+the profile's `APP_VARIANT` and EAS environment, and refuses a variant that doesn't match
+the profile:
 
 ```bash
 export APP_VARIANT=preview API_URL=https://api-preview.example.com
 pnpm exec eas build --profile preview --platform android
-pnpm exec eas update --channel preview --environment preview --message "..."
 ```
 
-Always pair `--channel X` with `--environment X`. A mismatch (for example
-`--environment development` on the `preview` channel) produces an update with the wrong
-runtime version, which preview builds ignore.
+**Updates: use the release script, not `eas update` directly.** EAS overlays the hosted
+environment on your shell, so a value missing from the hosted environment silently
+falls back to the shell (for example a stale `APP_VARIANT=production` with
+`--environment development`). `pnpm release:update <preview|production>` derives the
+channel, the EAS environment and the variant from its one argument. Before publishing it
+pulls the hosted environment (`eas env:pull`, into a temp dir that is deleted again) and
+refuses to publish unless that environment defines `APP_VARIANT` equal to the target, an
+`API_URL` valid for the variant (https), the same `EAS_PROJECT_ID` as your shell, and
+(production) real app ids. It then runs `eas update` with your shell's app settings
+removed:
+
+```bash
+pnpm release:update preview --message "Fix the settings screen"
+pnpm release:update production --message "..."
+```
+
+Updates also carry the variant's runtime version (`1.0.0-<variant>`), so even an update
+published by hand with the wrong variant is ignored by the other variants' builds.
 
 ## Adding a domain entity
 
