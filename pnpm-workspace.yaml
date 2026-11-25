@@ -1,7 +1,9 @@
 packages:
   - apps/*
   - packages/*
+allowBuilds:
+  '@parcel/watcher': false
+  dtrace-provider: false
+  protobufjs: false
 
-# Next.js 15 pins PostCSS to a version affected by GHSA-6g55-p6wh-862q and GHSA-r28c-9q8g-f849.
-overrides:
-  "next@15.5.29>postcss": "8.5.33"
+minimumReleaseAge: 10080

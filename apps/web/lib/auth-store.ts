@@ -2,10 +2,10 @@ import { isAxiosError } from "axios";
 import { create } from "zustand";
 import { api } from "./api";
 
-/** The API's `detail` message from an axios error, if it has one. */
+/** The API's error message from an axios error, if it has one. */
 function errorDetail(error: unknown, fallback: string): string {
-  if (isAxiosError<{ detail?: unknown }>(error)) {
-    const detail = error.response?.data?.detail;
+  if (isAxiosError<{ error?: { message?: unknown } }>(error)) {
+    const detail = error.response?.data?.error?.message;
     if (typeof detail === "string") return detail;
   }
   return fallback;

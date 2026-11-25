@@ -45,12 +45,16 @@ SECRET_KEY={{GENERATE_SECRET_KEY}}
 TEMPLATE
 cat > apps/web/.env.example <<'TEMPLATE'
 NEXT_PUBLIC_API_URL=http://localhost:8000
+WEB_LEGAL_APP_NAME="{{APP_NAME}}"
+WEB_LEGAL_DOMAIN={{DOMAIN}}
 TEMPLATE
 cat > apps/mobile/.env.example <<'TEMPLATE'
-EXPO_PUBLIC_ANDROID_PACKAGE={{ANDROID_PACKAGE}}
-EXPO_PUBLIC_IOS_BUNDLE_ID={{IOS_BUNDLE_ID}}
-EXPO_PUBLIC_DEEP_LINK_SCHEME={{DEEP_LINK_SCHEME}}
-EXPO_PUBLIC_APP_DOMAIN={{DOMAIN}}
+APP_NAME="{{DISPLAY_NAME}}"
+APP_SLUG={{PROJECT_NAME}}
+ANDROID_PACKAGE={{ANDROID_PACKAGE}}
+IOS_BUNDLE_ID={{IOS_BUNDLE_ID}}
+APP_SCHEME={{DEEP_LINK_SCHEME}}
+APP_DOMAIN={{DOMAIN}}
 TEMPLATE
 cat > packages/config/branding.mjs <<'TEMPLATE'
 export const project = "{{PROJECT_NAME}}";
@@ -72,9 +76,11 @@ expect_invalid --ios-bundle-id 'com.acme_app'
 expect_invalid --deep-link-scheme 'acme://'
 expect_invalid --domain
 expect_invalid --unknown
+# Characters that would break the quoted dotenv values (web, Compose, Expo).
+for bad in 'A\B' 'A"B' 'A$B' 'A`B'; do expect_invalid --display-name "$bad"; done
 [[ "$before" == "$(snapshot)" ]] || fail "invalid options modified files"
 
-APP_NAME='Acme & Sons | Co/Ltd \ Group'
+APP_NAME='Acme & Sons | Co/Ltd'
 options=(acme-app --display-name "$APP_NAME" --domain acme.example.com
     --android-package com.acme.android --ios-bundle-id com.acme.ios-app --deep-link-scheme acme.app)
 # Call from outside the fixture root to verify path resolution.
@@ -87,11 +93,15 @@ expect_line apps/mobile/.expo/settings.json '{"slug":"{{PROJECT_NAME}}"}'
 expect_line apps/api/.env.example 'SECRET_KEY={{GENERATE_SECRET_KEY}}'
 grep -qE '^SECRET_KEY=[0-9a-f]{64}$' apps/api/.env || fail "API env has no generated secret"
 cmp -s apps/web/.env.example apps/web/.env.local || fail "web env not copied"
-cmp -s apps/mobile/.env.example apps/mobile/.env.local || fail "mobile env not copied"
-expect_line apps/mobile/.env.local 'EXPO_PUBLIC_ANDROID_PACKAGE=com.acme.android'
-expect_line apps/mobile/.env.local 'EXPO_PUBLIC_IOS_BUNDLE_ID=com.acme.ios-app'
-expect_line apps/mobile/.env.local 'EXPO_PUBLIC_DEEP_LINK_SCHEME=acme.app'
-expect_line apps/mobile/.env.local 'EXPO_PUBLIC_APP_DOMAIN=acme.example.com'
+expect_line apps/web/.env.local "WEB_LEGAL_APP_NAME=\"$APP_NAME\""
+expect_line apps/web/.env.local 'WEB_LEGAL_DOMAIN=acme.example.com'
+expect_line apps/mobile/.env "APP_NAME=\"$APP_NAME\""
+expect_line apps/mobile/.env 'APP_SLUG=acme-app'
+expect_line apps/mobile/.env 'ANDROID_PACKAGE=com.acme.android'
+expect_line apps/mobile/.env 'IOS_BUNDLE_ID=com.acme.ios-app'
+expect_line apps/mobile/.env 'APP_SCHEME=acme.app'
+expect_line apps/mobile/.env 'APP_DOMAIN=acme.example.com'
+[[ ! -e apps/mobile/.env.local ]] || fail "mobile reads .env, not .env.local"
 
 before=$(snapshot)
 ./scripts/customize.sh "${options[@]}" >/dev/null
@@ -100,9 +110,35 @@ before=$(snapshot)
 # Existing local env files are user-owned, even when they contain a template marker.
 printf '%s\n' 'SECRET_KEY={{GENERATE_SECRET_KEY}}' > apps/api/.env
 printf '%s\n' 'NEXT_PUBLIC_API_URL=http://localhost:9000' > apps/web/.env.local
-printf '%s\n' 'EXPO_PUBLIC_DEEP_LINK_SCHEME=local-override' > apps/mobile/.env.local
+printf '%s\n' 'APP_SCHEME=local-override' > apps/mobile/.env
 before=$(snapshot)
 ./scripts/customize.sh "${options[@]}" >/dev/null
 [[ "$before" == "$(snapshot)" ]] || fail "customize.sh modified existing env files"
+
+# ---- The real template ---------------------------------------------------------
+# Customize a throwaway copy of the tracked files and check that no placeholder
+# survives where the apps read it. Skipped outside a Git checkout (e.g. a tarball).
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    COPY="$WORK/real"
+    mkdir "$COPY"
+    (cd "$ROOT" && git ls-files -z --cached --others --exclude-standard \
+        | while IFS= read -r -d '' f; do [[ -f "$f" ]] && printf '%s\0' "$f"; done \
+        | xargs -0 tar -cf -) | tar -xf - -C "$COPY"
+    cd "$COPY"
+    ./scripts/customize.sh real-app --display-name "Real App" --domain real.example.com \
+        --android-package com.real.app --ios-bundle-id com.real.app --deep-link-scheme realapp >/dev/null
+    leftover=$(grep -rIlE '\{\{(PROJECT_NAME|APP_NAME|DISPLAY_NAME|DOMAIN|ANDROID_PACKAGE|IOS_BUNDLE_ID|DEEP_LINK_SCHEME)\}\}' \
+        --exclude-dir=node_modules --exclude-dir=.git \
+        --exclude=customize.sh --exclude=test-customize.sh --exclude='*.test.*' --exclude='*.md' . || true)
+    [[ -z "$leftover" ]] || fail "placeholders left after customizing the real template: $leftover"
+    expect_line apps/mobile/.env 'ANDROID_PACKAGE=com.real.app'
+    expect_line apps/mobile/.env 'APP_SCHEME=realapp'
+    expect_line apps/web/.env.local 'WEB_LEGAL_DOMAIN=real.example.com'
+    grep -qE '^SECRET_KEY=[0-9a-f]{64}$' apps/api/.env || fail "real template: no generated secret"
+    before=$(snapshot)
+    ./scripts/customize.sh real-app --display-name "Real App" --domain real.example.com \
+        --android-package com.real.app --ios-bundle-id com.real.app --deep-link-scheme realapp >/dev/null
+    [[ "$before" == "$(snapshot)" ]] || fail "real template: second run modified files"
+fi
 
 echo "customize.sh: all checks passed"

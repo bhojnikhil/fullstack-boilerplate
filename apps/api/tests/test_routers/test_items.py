@@ -1,12 +1,12 @@
 """Tests for items router."""
 
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 
-def test_create_item(client: TestClient, auth_headers: dict[str, str]):
+async def test_create_item(client: AsyncClient, auth_headers: dict[str, str]):
     """Test creating an item."""
-    response = client.post(
-        "/items",
+    response = await client.post(
+        "/v1/items",
         headers=auth_headers,
         json={
             "title": "Test Item",
@@ -20,11 +20,11 @@ def test_create_item(client: TestClient, auth_headers: dict[str, str]):
     assert data["description"] == "Test Description"
 
 
-def test_get_items(client: TestClient, auth_headers: dict[str, str]):
+async def test_get_items(client: AsyncClient, auth_headers: dict[str, str]):
     """Test getting items."""
     # Create an item first
-    client.post(
-        "/items",
+    await client.post(
+        "/v1/items",
         headers=auth_headers,
         json={
             "title": "Test Item",
@@ -33,18 +33,18 @@ def test_get_items(client: TestClient, auth_headers: dict[str, str]):
     )
 
     # Get items
-    response = client.get("/items", headers=auth_headers)
+    response = await client.get("/v1/items", headers=auth_headers)
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["items"]
     assert len(data) >= 1
     assert data[0]["title"] == "Test Item"
 
 
-def test_create_item_unauthorized(client: TestClient):
+async def test_create_item_unauthorized(client: AsyncClient):
     """Test creating item without auth."""
-    response = client.post(
-        "/items",
+    response = await client.post(
+        "/v1/items",
         json={
             "title": "Test Item",
             "description": "Test Description",

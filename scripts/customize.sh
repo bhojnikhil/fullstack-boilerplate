@@ -71,6 +71,13 @@ done
 
 [[ "$display" =~ [^[:space:]] && "$display" != *$'\n'* && "$display" != *$'\r'* && "$display" != *'{{'* ]] \
     || die "Display name must be nonblank, on one line, and contain no template markers."
+# The display name lands in Next.js and Compose dotenv files (double-quoted) and in
+# Expo's dotenv: keep it literal in all of them.
+case "$display" in
+    *'\'*|*'"'*|*'$'*|*'`'*)
+        die "Display name cannot contain backslashes, double quotes, dollar signs or backticks."
+        ;;
+esac
 host_label='[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
 [[ ${#domain} -le 253 && "$domain" =~ ^$host_label(\.$host_label)*$ ]] \
     || die "Domain must be a hostname without a scheme, port or path."
@@ -142,4 +149,5 @@ create_env() {
 
 create_env apps/api/.env.example apps/api/.env
 create_env apps/web/.env.example apps/web/.env.local
-create_env apps/mobile/.env.example apps/mobile/.env.local
+# Expo CLI and app.config.ts read apps/mobile/.env (not .env.local).
+create_env apps/mobile/.env.example apps/mobile/.env
