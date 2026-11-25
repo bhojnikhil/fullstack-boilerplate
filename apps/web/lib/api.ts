@@ -128,6 +128,19 @@ export class ApiClient {
       .POST("/v1/auth/verify-email", { body: { token, password } })
       .then(unwrap);
   }
+  forgotPassword(email: string) {
+    return this.client
+      .POST("/v1/auth/password/forgot", { body: { email } })
+      .then(unwrap);
+  }
+  resetPassword(token: string, newPassword: string) {
+    return this.client
+      .POST("/v1/auth/password/reset", { body: { token, new_password: newPassword } })
+      .then(unwrap);
+  }
+  confirmEmail(token: string) {
+    return this.client.POST("/v1/auth/email/confirm", { body: { token } }).then(unwrap);
+  }
   async login(email: string, password: string) {
     const data = unwrap(
       await this.client.POST("/v1/auth/login", { body: { email, password } }),

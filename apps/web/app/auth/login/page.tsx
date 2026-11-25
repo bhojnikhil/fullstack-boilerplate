@@ -59,6 +59,12 @@ export default function LoginPage() {
       </form>
 
       <p className="mt-4 text-center text-sm">
+        <Link href="/auth/forgot-password" className="underline">
+          Forgot password?
+        </Link>
+      </p>
+
+      <p className="mt-4 text-center text-sm">
         Don&apos;t have an account?{" "}
         <Link
           href="/auth/register"

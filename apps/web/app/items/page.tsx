@@ -17,6 +17,7 @@ export default function ItemsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [failureCount, setFailureCount] = useState(0);
 
@@ -63,13 +64,15 @@ export default function ItemsPage() {
     }
 
     try {
-      await api.createItem(title, description);
+      if (editingId) await api.updateItem(editingId, title, description);
+      else await api.createItem(title, description);
+      setEditingId(null);
       setTitle("");
       setDescription("");
       setError("");
       await loadItems();
     } catch (err) {
-      setError("Failed to create item");
+      setError("Failed to save item");
       setFailureCount((count) => count + 1);
       console.error(err);
     }
@@ -114,7 +117,9 @@ export default function ItemsPage() {
 
       <div className="grid items-start gap-6 md:grid-cols-[1fr_2fr]">
         <div className="rounded-xl border bg-card p-5">
-          <h2 className="text-xl font-semibold">Create Item</h2>
+          <h2 className="text-xl font-semibold">
+            {editingId ? "Edit item" : "Create item"}
+          </h2>
           <form onSubmit={handleCreateItem} className="mt-4 grid gap-4">
             <TextField
               label="Title"
@@ -133,8 +138,21 @@ export default function ItemsPage() {
               />
             </div>
             <Button type="submit" disabled={isLoadingMore}>
-              Create
+              {editingId ? "Save changes" : "Create"}
             </Button>
+            {editingId && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setEditingId(null);
+                  setTitle("");
+                  setDescription("");
+                }}
+              >
+                Cancel edit
+              </Button>
+            )}
           </form>
         </div>
 
@@ -158,6 +176,16 @@ export default function ItemsPage() {
                         {new Date(item.created_at).toLocaleDateString()}
                       </small>
                     </div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setEditingId(item.id);
+                        setTitle(item.title);
+                        setDescription(item.description ?? "");
+                      }}
+                    >
+                      Edit {item.title}
+                    </Button>
                     <Button
                       variant="secondary"
                       onClick={() => handleDeleteItem(item.id)}
