@@ -7,7 +7,14 @@ COMPOSE ?= docker compose
 
 API_DIR := apps/api
 # Host-side Python commands (tests, migrations) talk to the compose Postgres.
-DATABASE_URL ?= postgresql://postgres:postgres@localhost:5432/boilerplate
+POSTGRES_PORT ?= 5432
+API_PORT ?= 8000
+WEB_PORT ?= 3000
+export POSTGRES_PORT API_PORT WEB_PORT
+NEXT_PUBLIC_API_URL ?= http://localhost:$(API_PORT)
+export NEXT_PUBLIC_API_URL
+
+DATABASE_URL ?= postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate
 export DATABASE_URL
 
 CYAN := \033[0;36m
@@ -15,7 +22,7 @@ GREEN := \033[0;32m
 NC := \033[0m
 
 .PHONY: help setup dev up down logs ps build fresh smoke \
-	migrate migration db-shell \
+	migrate migrate-compose migration db-shell \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
 	fmt fmt-check build-web
 
@@ -29,18 +36,18 @@ setup: ## Install API (uv) and JS (pnpm) dependencies from the lockfiles
 	cd $(API_DIR) && $(UV) sync --locked
 	$(PNPM) install --frozen-lockfile
 
-dev: ## postgres + api in Docker (hot reload), web dev server on the host
-	$(COMPOSE) up -d --wait postgres api
-	$(PNPM) turbo run dev --filter web
+dev: migrate-compose ## postgres + api in Docker (hot reload), web dev server on the host
+	$(COMPOSE) up -d --wait api
+	$(PNPM) turbo run dev --filter web -- --port $(WEB_PORT)
 
 # ============================== Docker ======================================
 
-up: ## Start postgres, api and web in Docker
+up: migrate-compose ## Migrate the database, then start api and web in Docker
 	$(COMPOSE) up -d
 	@printf "$(GREEN)✓ Services started$(NC)\n"
-	@echo "  Web:      http://localhost:3000"
-	@echo "  API:      http://localhost:8000"
-	@echo "  API docs: http://localhost:8000/docs"
+	@echo "  Web:      http://localhost:$(WEB_PORT)"
+	@echo "  API:      http://localhost:$(API_PORT)"
+	@echo "  API docs: http://localhost:$(API_PORT)/docs"
 
 down: ## Stop all services
 	$(COMPOSE) down
@@ -56,17 +63,31 @@ build: ## Rebuild all images
 
 fresh: ## Full reset: stop, delete the database volume, rebuild, start
 	$(COMPOSE) down -v
+	$(MAKE) migrate-compose
 	$(COMPOSE) up -d --build --wait
 	@printf "$(GREEN)✓ Fresh start complete$(NC)\n"
 
-smoke: ## Build + start all services as packaged; require healthy, non-root, no mounts
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait --wait-timeout 180 postgres api web
-	COMPOSE_FILE=docker-compose.yml:docker-compose.smoke.yml ./scripts/check-containers.sh api web
-	@printf "$(GREEN)✓ postgres, api and web are healthy, non-root, unmounted$(NC) (stop with: make down)\n"
+smoke: export COMPOSE_FILE ?= docker-compose.yml:docker-compose.smoke.yml
+smoke: ## Check the packaged containers and production API configuration
+	@set -eu; \
+	SMOKE_SECRET_KEY="$$(openssl rand -hex 32)"; export SMOKE_SECRET_KEY; \
+	$(COMPOSE) up -d --build --wait --wait-timeout 180 postgres api web; \
+	if [ "$${SMOKE_EXPECT_UNMIGRATED:-0}" = 1 ] && ! $(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready 503; then \
+		echo "Expected HTTP 503 from /ready before migrations" >&2; exit 1; \
+	fi; \
+	$(COMPOSE) run --rm --no-deps api alembic upgrade head; \
+	$(COMPOSE) exec -T api python healthcheck.py http://127.0.0.1:8000/ready; \
+	./scripts/check-production-api.sh; \
+	./scripts/check-containers.sh api web
+	@printf "$(GREEN)✓ postgres, api and web are healthy; api and web are non-root and unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
 
-migrate: ## Apply Alembic migrations (DATABASE_URL, default: compose Postgres)
+migrate-compose: ## Apply migrations with a one-off Compose container
+	$(COMPOSE) up -d --wait postgres
+	$(COMPOSE) run --rm --build --no-deps api alembic upgrade head
+
+migrate: ## Apply migrations from the host (MIGRATION_DATABASE_URL or DATABASE_URL)
 	cd $(API_DIR) && $(UV) run --locked alembic upgrade head
 
 migration: ## Create an Alembic migration: make migration name=add_column
@@ -78,8 +99,12 @@ db-shell: ## Open a psql shell on the dev database
 
 # ============================== Quality =====================================
 
-test: ## Run API tests (needs Postgres, e.g. `make up` or `docker compose up -d postgres`)
-	cd $(API_DIR) && $(UV) run --locked pytest
+test: ## Run API tests against a dedicated Postgres database (override TEST_DATABASE_URL)
+ifndef TEST_DATABASE_URL
+	$(COMPOSE) up -d --wait postgres
+	printf '%s\n' "SELECT 'CREATE DATABASE boilerplate_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'boilerplate_test')" '\gexec' | $(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres
+endif
+	@cd $(API_DIR) && ENV=test SECRET_KEY="$$(openssl rand -hex 32)" DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
 
 lint: lint-api lint-web ## Lint everything
 

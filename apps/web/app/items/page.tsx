@@ -3,19 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
-import { api } from "@/lib/api";
-
-interface Item {
-  id: string;
-  title: string;
-  description: string;
-  created_at: string;
-}
+import { api, type Item } from "@/lib/api";
 
 export default function ItemsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const [items, setItems] = useState<Item[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -30,17 +25,19 @@ export default function ItemsPage() {
     loadItems();
   }, [user, router]);
 
-  const loadItems = async () => {
+  const loadItems = async (cursor?: string) => {
+    const setLoading = cursor ? setIsLoadingMore : setIsLoading;
     try {
-      setIsLoading(true);
-      const response = await api.getItems();
-      setItems(response.data);
+      setLoading(true);
+      const { data } = await api.getItems(cursor);
+      setItems((previous) => (cursor ? [...previous, ...data.items] : data.items));
+      setNextCursor(data.next_cursor);
       setError("");
     } catch (err) {
       setError("Failed to load items");
       console.error(err);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -139,7 +136,12 @@ export default function ItemsPage() {
                   />
                 </div>
 
-                <button type="submit" className="button" style={{ width: "100%" }}>
+                <button
+                  type="submit"
+                  className="button"
+                  disabled={isLoadingMore}
+                  style={{ width: "100%" }}
+                >
                   Create
                 </button>
               </form>
@@ -180,12 +182,23 @@ export default function ItemsPage() {
                         <button
                           className="button button-secondary"
                           onClick={() => handleDeleteItem(item.id)}
+                          disabled={isLoadingMore}
                         >
                           Delete
                         </button>
                       </div>
                     </div>
                   ))}
+                  {nextCursor && (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={isLoadingMore}
+                      onClick={() => loadItems(nextCursor)}
+                    >
+                      {isLoadingMore ? "Loading…" : "Load more"}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

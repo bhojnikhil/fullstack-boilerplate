@@ -1,17 +1,21 @@
-from collections.abc import Generator
+from collections.abc import AsyncIterator
+from typing import Annotated
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import settings
-
-engine = create_engine(settings.database_url, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionFactory = async_sessionmaker[AsyncSession]
 
 
-def get_db() -> Generator[Session]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def get_session_factory(request: Request) -> SessionFactory:
+    factory: SessionFactory = request.app.state.session_factory
+    return factory
+
+
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    # Function scope serializes the response before commit and commits before ASGI sends it.
+    async with get_session_factory(request).begin() as session:
+        yield session
+
+
+RequestSession = Annotated[AsyncSession, Depends(get_db, scope="function")]

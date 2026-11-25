@@ -7,9 +7,10 @@ for the probe to work.
 Exit code 0 means healthy (HTTP 2xx within the timeout); anything else is
 unhealthy; redirects are not followed. Usage::
 
-    python healthcheck.py [URL]
+    python healthcheck.py [URL] [EXPECTED_STATUS]
 
 The URL defaults to ``$HEALTHCHECK_URL`` or ``http://127.0.0.1:8000/health``.
+With ``EXPECTED_STATUS``, only that exact HTTP status counts as success.
 """
 
 from __future__ import annotations
@@ -37,20 +38,25 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def check(url: str, timeout: float = TIMEOUT_SECONDS) -> int:
-    """Return 0 if ``url`` itself answers 2xx within ``timeout``, else 1."""
+def check(url: str, timeout: float = TIMEOUT_SECONDS, *, expected_status: int | None = None) -> int:
+    """Return 0 for a matching response, or 1 if it differs or the probe fails."""
     try:
         with _opener.open(url, timeout=timeout) as response:
             status: int = response.status
+    except urllib.error.HTTPError as error:
+        with error:
+            status = error.code
     except (urllib.error.URLError, TimeoutError, OSError):
-        # HTTPError (3xx/4xx/5xx) is a subclass of URLError, so it lands here too.
         return 1
+    if expected_status is not None:
+        return 0 if status == expected_status else 1
     return 0 if 200 <= status < 300 else 1
 
 
 def main(argv: list[str]) -> int:
     url = argv[1] if len(argv) > 1 else os.environ.get("HEALTHCHECK_URL", DEFAULT_URL)
-    return check(url)
+    expected_status = int(argv[2]) if len(argv) > 2 else None
+    return check(url, expected_status=expected_status)
 
 
 if __name__ == "__main__":

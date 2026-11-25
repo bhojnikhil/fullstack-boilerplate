@@ -1,1 +1,1 @@
-# Core application utilities
+API_PREFIX = "/v1"
