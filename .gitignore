@@ -50,6 +50,8 @@ node_modules/
 out/
 .turbo/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 next-env.d.ts
 npm-debug.log*

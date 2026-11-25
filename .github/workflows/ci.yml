@@ -73,7 +73,7 @@ jobs:
         run: SECRET_KEY="$(openssl rand -hex 32)" uv run --locked pytest
 
   web:
-    name: web (prettier, eslint, tsc, build)
+    name: web (format, lint, types, build, unit and browser tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -99,6 +99,23 @@ jobs:
 
       - name: Lint, type check, build (turbo)
         run: pnpm turbo run lint typecheck build
+
+      - name: Unit tests (Vitest)
+        run: pnpm --filter web test
+
+      - name: Install Chromium and system dependencies
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      - name: Public web smoke tests (Playwright, standalone build)
+        id: playwright
+        run: pnpm --filter web test:e2e
+
+      - name: Upload Playwright failure artifacts
+        if: failure() && steps.playwright.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results
+          path: apps/web/test-results/
 
   scripts:
     name: scripts (customize.sh, check-containers.sh)

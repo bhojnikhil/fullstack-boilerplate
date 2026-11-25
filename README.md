@@ -1,6 +1,6 @@
 # Full-Stack Boilerplate
 
-A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 15** frontend
+A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 16** frontend
 (`apps/web`). It uses uv for Python and pnpm workspaces + Turborepo for JavaScript, runs
 locally with Docker Compose, and is tested in GitHub Actions.
 
@@ -55,13 +55,16 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   ([ADR 0001](docs/adr/0001-python-tooling-uv.md)).
 
 **Frontend (`apps/web`)**
-- Next.js 15 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
+- Next.js 16 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
   config in `packages/config`.
-- Pages: `/`, `/auth/login`, `/auth/register`, `/items`.
+- Public pages at `/`, `/privacy`, `/terms`, and `/account-deletion`. Sign-in, registration
+  and sample items at `/auth/login`, `/auth/register`, and `/items`.
+- Tailwind CSS 4 and shadcn/ui button, input and label components. The site theme follows
+  the operating system by default and remembers an explicit light or dark selection.
+- Android App Links and Apple Universal Links association documents at `/.well-known/`.
+- Vitest with React Testing Library and a Playwright Chromium smoke suite for the public site.
 - axios API client (`lib/api.ts`) that sends the JWT from `localStorage` and redirects to
   login on 401. Zustand auth store (`lib/auth-store.ts`).
-- Plain CSS (`app/globals.css`). No component library, no Tailwind, no dark mode.
-- No Google sign-in button and no frontend tests yet.
 
 **Tooling**
 - pnpm workspaces + Turborepo for `lint`, `typecheck`, `build`, `dev`
@@ -82,14 +85,17 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
     drift check, and pytest on Postgres 16 with a 96.0% branch-aware coverage gate.
   - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
-    `next build` via Turborepo;
+    `next build` via Turborepo, Vitest, and Playwright against the standalone build;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
     api and web as packaged, and require all to be healthy. The API smoke uses production
     settings, a temporary signing key and a host allowlist that excludes loopback. It
     checks HSTS, JSON logs and startup failure without a key. CI requires `/ready`
-    to return HTTP 503 before explicit migrations and 2xx afterward. The API and web
-    must run as unprivileged users with no mounts. Locally use `make smoke`.
+    to return HTTP 503 before explicit migrations and 2xx afterward. The web smoke
+    requires direct 200 JSON responses and one-hour cache headers from both association
+    URLs. It checks security headers and the runtime values in the privacy and account
+    deletion pages. The API and web must run as unprivileged users with no mounts.
+    Locally use `make smoke`.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -203,11 +209,41 @@ image. Unknown revisions are treated as newer; the API logs their IDs once per d
 set per process. During a rolling
 release, keep migrations compatible with instances of the previous release. See [ADR 0004](docs/adr/0004-async-postgres.md).
 
-**Web** (`apps/web/.env.local`):
+**Web** ([`.env.example`](apps/web/.env.example))
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
+| `WEB_LEGAL_APP_NAME` | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates. |
+| `WEB_LEGAL_DOMAIN` | `[Site domain]` placeholder | Domain shown in the privacy and terms templates. |
+| `WEB_SUPPORT_EMAIL` | Unset | Monitored mailbox for deletion requests sent from `/account-deletion`. |
+| `ANDROID_PACKAGE_NAME` | Unset | Android application ID, for example `com.example.app`. |
+| `ANDROID_SHA256_CERT_FINGERPRINTS` | Unset | Comma-separated, colon-delimited SHA-256 signing certificate fingerprints. Include the Play App Signing certificate for Play builds. |
+| `IOS_TEAM_ID` | Unset | 10-character Apple Developer Team ID. |
+| `IOS_BUNDLE_ID` | Unset | iOS bundle identifier, for example `com.example.app`. |
+| `IOS_APPLINK_PATHS` | `/app/*` | Comma-separated URL paths beginning with `/`. Supports `*` for any number of characters and `?` for one character. Include the email-verification, password-reset and invite paths that the mobile app handles. The root path and any pattern matching `/privacy`, `/terms` or `/account-deletion` are rejected. |
+
+Host development and `make up` both read the legal, support and association
+settings from the optional `apps/web/.env.local` at **runtime**. After changing
+that file, run `make up` again to apply the values in Compose. When running the
+standalone image directly, pass the variables to the container, for example with
+`docker run -e WEB_SUPPORT_EMAIL=support@example.com …`.
+
+### Public pages and mobile links
+
+- `scripts/customize.sh PROJECT_NAME "App Name" DOMAIN` fills the legal app and domain
+  values in the web env example. It copies that example to `apps/web/.env.local` when the
+  local file is absent. The script rejects backslashes, double quotes, dollar signs,
+  backticks, and line breaks in the display name so both dotenv readers interpret it
+  literally. Run `make up` and visit `/privacy` to see the configured values.
+  Before publishing, complete the privacy and terms templates and the account deletion
+  template, including the in-app workflow, the data deleted or retained, and retention
+  periods. Set `WEB_SUPPORT_EMAIL` to a monitored mailbox. At startup, the web server
+  logs a warning for a missing or invalid mailbox and any invalid association setting.
+- The Android and Apple association URLs each return `application/json` from the
+  slashless path and return 404 until their corresponding settings are valid. Successful
+  association documents are cacheable for one hour. Verify both URLs return 200 over
+  HTTPS without redirects on the public domain.
 
 ## Common commands
 
@@ -227,7 +263,7 @@ make migrate-compose           # alembic upgrade head in a one-off Compose conta
 make migration name=add_column # autogenerate a migration
 make db-shell                  # psql into the dev database
 make fresh                     # wipe the DB volume, rebuild, start
-make smoke                     # build + start all images as packaged; healthy, non-root, no mounts
+make smoke                     # packaged containers, health and production API/web checks
 ```
 
 ## API contracts
@@ -250,6 +286,24 @@ Validation errors list invalid field locations and error types. The API accepts 
 short ASCII `X-Request-Id` tracing token or generates one, and returns it on responses.
 
 ## Testing
+
+Run the web checks from the repository root. Playwright serves the existing Next.js
+standalone build on port 3308. It injects the app name, domain, support mailbox and
+mobile association settings when the server starts.
+
+```bash
+pnpm --filter web test
+pnpm turbo run build
+pnpm --filter web exec playwright install chromium
+pnpm --filter web test:e2e
+```
+
+On Linux, use `playwright install --with-deps chromium` to install the system libraries
+as well. The suite checks public navigation, theme persistence, form feedback, security
+headers, and the association URLs. It also checks that values supplied at server start
+appear in the public pages. `make smoke` repeats the HTTP checks against the Docker image
+for both association URLs, response headers, and the runtime values on `/privacy` and
+`/account-deletion`.
 
 `make test` creates and uses the dedicated `boilerplate_test` database on Compose
 Postgres. To use another dedicated Postgres database, run

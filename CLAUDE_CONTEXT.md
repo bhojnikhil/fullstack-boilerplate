@@ -1,8 +1,8 @@
 # {{APP_NAME}} Full-Stack Boilerplate Context
 
 The [README](README.md) lists the current auth limitations and local setup commands.
-The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 15,
-React 19, axios and Zustand.
+The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 16,
+React 19, Tailwind CSS 4, shadcn/ui, axios and Zustand.
 
 ## Layout
 
@@ -79,7 +79,9 @@ make dev                          # Compose Postgres + API, Next.js dev server o
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
 make build-web                    # production Next.js build
-make smoke                        # packaged API in production mode, migrations and probes
+make smoke                        # packaged API and web, migrations and production probes
+pnpm --filter web test            # Vitest and React Testing Library
+pnpm --filter web test:e2e        # public web smoke with Playwright Chromium
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres
