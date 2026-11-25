@@ -19,12 +19,10 @@ yet.
 console in development, SMTP (stdlib `smtplib` in a worker thread, with STARTTLS or
 implicit TLS) and in-memory for tests. Mailpit captures SMTP mail in Compose. Templates
 are `string.Template` files with an HTML layout; values are escaped for HTML and a missing
-value raises. Services queue messages on a request-scoped `Mailer`, which sends them in a
-background task after the response. Responses are sent only after the transaction
-commits, so a rolled-back request sends nothing, and response times do not reveal
-whether a message was sent. The cost is that a crash or SMTP failure loses the message.
-A durable queue with retries replaces the background task in a later phase; backends keep
-the same interface. Emailed links put tokens in the URL fragment so web servers and
+value raises. Services queue messages on a request-scoped `Mailer`. (Superseded in part by
+[ADR 0009](0009-postgres-job-queue.md): messages are now durable jobs enqueued in the
+request's transaction and sent by the worker with retries, not by a background task;
+backends keep the same interface, plus Resend.) Emailed links put tokens in the URL fragment so web servers and
 `Referer` headers never see them.
 
 **Audit log.** `audit_events` rows are added to the request's unit of work, so they commit
