@@ -569,3 +569,35 @@ async def test_explicit_google_link_is_rate_limited(client, google, auth_headers
         429,
         "rate_limited",
     )
+
+
+async def test_explicit_google_link_notifies_account_owner(client, google, auth_headers, outbox):
+    from app.integrations.email.templates import Template
+
+    response = await client.post(
+        "/v1/auth/google/link", json={"id_token": google.issue()}, headers=auth_headers
+    )
+    assert response.status_code == 204
+    assert [(e.template, e.to) for e in outbox] == [(Template.GOOGLE_LINKED, "test@example.com")]
+
+
+async def test_reset_removes_an_explicitly_linked_google_identity(
+    client, google, auth_headers, outbox, session_factory
+):
+    from app.integrations.email.templates import Template
+    from tests.test_routers.test_auth import NEW_PASSWORD, token_from
+
+    token = google.issue(email="test@example.com")
+    assert (
+        await client.post("/v1/auth/google/link", json={"id_token": token}, headers=auth_headers)
+    ).status_code == 204
+    assert any(e.template == Template.GOOGLE_LINKED and e.to == "test@example.com" for e in outbox)
+    await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
+    reset = next(e for e in reversed(outbox) if e.template == Template.RESET_PASSWORD)
+    assert (
+        await client.post(
+            "/v1/auth/password/reset",
+            json={"token": token_from(reset), "new_password": NEW_PASSWORD},
+        )
+    ).status_code == 204
+    assert await linked_accounts(session_factory) == []

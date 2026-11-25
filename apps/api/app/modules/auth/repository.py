@@ -277,6 +277,7 @@ class AccountTokenRepository:
         expires_at: datetime,
         *,
         password_hash: str | None = None,
+        pending_name: str | None = None,
     ) -> None:
         self._db.add(
             AccountToken(
@@ -285,6 +286,7 @@ class AccountTokenRepository:
                 token_hash=token_hash,
                 email=email,
                 password_hash=password_hash,
+                pending_name=pending_name,
                 expires_at=expires_at,
                 created_at=datetime.now(UTC),
             )
@@ -313,6 +315,19 @@ class AccountTokenRepository:
             .execution_options(populate_existing=True)
         )
         return await self._db.scalar(stmt)
+
+    async def trim_verifications(self, user_id: uuid.UUID, keep: int) -> None:
+        # Called with the user locked. Preserve the newest bounded set.
+        old = (
+            select(AccountToken.id)
+            .where(
+                AccountToken.user_id == user_id,
+                AccountToken.purpose == AccountTokenPurpose.VERIFY_EMAIL,
+            )
+            .order_by(AccountToken.created_at.desc(), AccountToken.id.desc())
+            .offset(keep)
+        )
+        await self._db.execute(delete(AccountToken).where(AccountToken.id.in_(old)))
 
     async def latest(self, user_id: uuid.UUID, purpose: AccountTokenPurpose) -> AccountToken | None:
         stmt = (

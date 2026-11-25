@@ -65,6 +65,7 @@ class AccountService:
                 user.id, SessionRevocation.PASSWORD_CHANGED, keep=context.session.id
             )
         )
+        await auth.tokens.delete_for_user(user.id)
         context.session.authenticated_at = datetime.now(UTC)
         auth.audit(
             AuditEventType.PASSWORD_CHANGED,
@@ -104,6 +105,7 @@ class AccountService:
             link=web_link(self.config, CONFIRM_EMAIL_PATH, token),
             expires=describe(lifetime),
         )
+        auth.mailer.send(Template.EMAIL_CHANGE_REQUESTED, user.email, name=user.name)
         auth.audit(
             AuditEventType.EMAIL_CHANGE_REQUESTED,
             user_id=str(user.id),

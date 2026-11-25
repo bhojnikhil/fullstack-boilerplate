@@ -1,15 +1,15 @@
 """Email/password accounts: registration, sign-in, verification, reset and sessions.
 
-Account ownership rules (see docs/adr/0008-rate-limits-email-audit.md):
+Account ownership rules (see docs/adr/0010-rate-limits-email-audit.md):
 
 - Registration never gives an account a usable password. The chosen password waits
   in the emailed verification token; opening the link and entering that password
   activates it. A link from someone else's registration is useless without their
-  password, and registering again replaces the pending password.
+  password. Several independently bound links can be pending at once.
 - Only accounts with a verified email can sign in with a password.
 - When someone proves control of an unverified account's inbox (verification or
-  password reset), they take it over: other sessions, linked identities and emailed
-  tokens are removed ("claim").
+  password reset), they take it over: other sessions and emailed tokens are removed.
+  A reset preserves an already-linked identity only for a passwordless account.
 
 Responses never reveal whether an email is registered: registration, verification
 resends and reset requests answer before looking anything up (the account work runs
@@ -94,6 +94,7 @@ async def issue_token(
     lifetime: timedelta,
     *,
     password_hash: str | None = None,
+    pending_name: str | None = None,
 ) -> str:
     """Create a single-use emailed token. Only its SHA-256 is stored."""
     token = new_token()
@@ -104,15 +105,21 @@ async def issue_token(
         email,
         datetime.now(UTC) + lifetime,
         password_hash=password_hash,
+        pending_name=pending_name,
     )
     return token
 
 
 async def send_verification(
-    db: AsyncSession, mail: MailSender, config: Settings, user: User, password_hash: str
+    db: AsyncSession,
+    mail: MailSender,
+    config: Settings,
+    user: User,
+    password_hash: str,
+    pending_name: str | None = None,
 ) -> None:
-    """Email a link that activates ``password_hash``. Earlier links stop working."""
-    await AccountTokenRepository(db).delete_for_user(user.id, AccountTokenPurpose.VERIFY_EMAIL)
+    """Retain a bounded set of independently bound verification links."""
+    await AccountTokenRepository(db).trim_verifications(user.id, keep=4)
     lifetime = timedelta(hours=config.email_token_expire_hours)
     token = await issue_token(
         db,
@@ -121,11 +128,12 @@ async def send_verification(
         user.email,
         lifetime,
         password_hash=password_hash,
+        pending_name=pending_name,
     )
     mail.send(
         Template.VERIFY_EMAIL,
         user.email,
-        name=user.name,
+        name=pending_name or user.name,
         link=web_link(config, VERIFY_EMAIL_PATH, token),
         expires=describe(lifetime),
     )
@@ -145,21 +153,19 @@ async def register_account(
     await lock_email(db, email)
     user = await users.get_by_email(email)
     if user is None:
-        user = await users.create(email, name)
+        user = await users.create(email, "User")
         if user is None:  # pragma: no cover - the email lock prevents this
             return
         record_event(
             db, AuditEventType.ACCOUNT_REGISTERED, client=client, user_id=user.id, method="password"
         )
-        await send_verification(db, mail, config, user, password_hash)
+        await send_verification(db, mail, config, user, password_hash, name)
         return
     user = await users.lock(user.id)
     if user is None or not user.is_active:
         return
     if user.email_verified_at is None:
-        # Nobody has proven this inbox yet: the newest registration's password wins.
-        user.name = name
-        await send_verification(db, mail, config, user, password_hash)
+        await send_verification(db, mail, config, user, password_hash, name)
     else:
         mail.send(
             Template.ACCOUNT_EXISTS,
@@ -187,7 +193,9 @@ async def resend_verification(
     password_hash = latest.password_hash if latest is not None else None
     password_hash = password_hash or user.hashed_password
     if password_hash is not None:
-        await send_verification(db, mail, config, user, password_hash)
+        await send_verification(
+            db, mail, config, user, password_hash, latest.pending_name if latest else None
+        )
 
 
 async def send_password_reset(
@@ -259,7 +267,9 @@ class AuthService:
             **fields,
         )
 
-    async def claim(self, user: User, *, password_hash: str | None) -> int:
+    async def claim(
+        self, user: User, *, password_hash: str | None, preserve_linked: bool = False
+    ) -> int:
         """The inbox owner takes over an unverified account (call with the user locked).
 
         Anything set up before the inbox was proven may belong to someone else, so
@@ -269,7 +279,15 @@ class AuthService:
         user.hashed_password = password_hash
         user.email_verified_at = datetime.now(UTC)
         revoked = await self.session_rows.revoke_all(user.id, SessionRevocation.ACCOUNT_CLAIMED)
-        identities = await self.identities.delete_for_user(user.id)
+        if preserve_linked:
+            identities = await self.identities.delete_for_user(
+                user.id, state=OAuthLinkState.UNCONFIRMED
+            )
+            identities += await self.identities.delete_for_user(
+                user.id, state=OAuthLinkState.UNLINKED
+            )
+        else:
+            identities = await self.identities.delete_for_user(user.id)
         await self.tokens.delete_for_user(user.id)
         self.audit(
             AuditEventType.ACCOUNT_CLAIMED,
@@ -336,6 +354,8 @@ class AuthService:
             self.audit(AuditEventType.LOGIN_FAILED, user_id=str(user.id), reason="verification")
             raise DomainError(ErrorCode.INVALID_CREDENTIALS, "Incorrect password", commit=True)
         await self.limiter.clear_failures(limits.LOGIN_FAILURES, identifier)
+        if record.pending_name is not None:
+            user.name = record.pending_name
         await self.claim(user, password_hash=replacement or record.password_hash)
         self.audit(AuditEventType.EMAIL_VERIFIED, user_id=str(user.id))
 
@@ -401,13 +421,16 @@ class AuthService:
         self.deferred.run("password_reset", work)
 
     async def reset_password(self, data: ResetPasswordRequest) -> None:
-        user, _ = await self.lock_token(AccountTokenPurpose.RESET_PASSWORD, data.token)
         await self.policy.check(data.new_password)
         password_hash = await hash_password(data.new_password)
+        user, _ = await self.lock_token(AccountTokenPurpose.RESET_PASSWORD, data.token)
         if user.email_verified_at is None:
             # The emailed link proves control of the inbox.
-            sessions_revoked = await self.claim(user, password_hash=password_hash)
+            sessions_revoked = await self.claim(
+                user, password_hash=password_hash, preserve_linked=user.hashed_password is None
+            )
         else:
+            had_password = user.hashed_password is not None
             user.hashed_password = password_hash
             sessions_revoked = len(
                 await self.session_rows.revoke_all(user.id, SessionRevocation.PASSWORD_RESET)
@@ -419,7 +442,10 @@ class AuthService:
                 AccountTokenPurpose.CHANGE_EMAIL,
                 AccountTokenPurpose.VERIFY_EMAIL,
             )
-            await self.identities.delete_for_user(user.id, state=OAuthLinkState.UNCONFIRMED)
+            if had_password:
+                await self.identities.delete_for_user(user.id)
+            else:
+                await self.identities.delete_for_user(user.id, state=OAuthLinkState.UNCONFIRMED)
         await self.limiter.clear_failures(limits.LOGIN_FAILURES, user.email.lower())
         self.audit(
             AuditEventType.PASSWORD_RESET, user_id=str(user.id), sessions_revoked=sessions_revoked
@@ -473,6 +499,10 @@ class AuthService:
         return target is context.session
 
     async def revoke_other_sessions(self, context: AuthContext) -> int:
+        user = await self.users.lock(context.user.id)
+        if user is None:
+            raise DomainError(ErrorCode.INVALID_TOKEN)
+        await self.tokens.delete_for_user(user.id)
         revoked = len(
             await self.session_rows.revoke_all(
                 context.user.id, SessionRevocation.REVOKED_OTHERS, keep=context.session.id

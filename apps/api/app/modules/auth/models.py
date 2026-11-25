@@ -19,7 +19,7 @@ from app.core.models import Base, TimestampMixin, UUIDMixin
 
 class OAuthProvider(StrEnum):
     GOOGLE = "google"
-    # Sign in with Apple would be added here; see docs/adr/0007-google-id-token-sign-in.md.
+    # Sign in with Apple would be added here; see docs/adr/0009-google-id-token-sign-in.md.
 
 
 class OAuthLinkState(StrEnum):
@@ -154,5 +154,6 @@ class AccountToken(Base, UUIDMixin):
     # Email verification only: the password chosen at registration. It becomes the
     # account's password when someone who knows it opens the emailed link.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    pending_name: Mapped[str | None] = mapped_column(String(255))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

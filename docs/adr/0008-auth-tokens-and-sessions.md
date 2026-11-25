@@ -1,4 +1,4 @@
-# 0006 Auth tokens, sessions and web/mobile token transport
+# 0008 Auth tokens, sessions and web/mobile token transport
 
 **Status** Accepted
 

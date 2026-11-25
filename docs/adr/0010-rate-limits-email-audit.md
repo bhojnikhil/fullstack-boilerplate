@@ -1,4 +1,4 @@
-# 0008 Rate limits, transactional email, audit log and enumeration resistance
+# 0010 Rate limits, transactional email, audit log and enumeration resistance
 
 **Status** Accepted
 
@@ -7,7 +7,8 @@
 The default Postgres backend does one atomic upsert per hit on `rate_limits`, using the
 database clock for windows and for `Retry-After`. It runs in its own short transaction,
 because a failed sign-in rolls the request back but must still count. An in-memory
-backend serves tests and single-process development; staging and production require
+backend serves tests and single-process development; the separate limiter pool is small by
+design and fails closed when unavailable. Staging and production require
 Postgres. Keys are the rule name plus an HMAC of the identifier, so emails and IPs are
 not stored. Sign-in also has a progressive lockout per account identifier (the
 submitted email, whether or not an account exists): five failures within an hour lock
@@ -37,11 +38,14 @@ email addresses or IPs; digests stand in where correlation helps.
 before account-dependent work in a background task. Registration always hashes the
 submitted password. Unverified accounts cannot sign in, link credentials or change their
 email. Registration stores the pending password hash with a verification token; a later
-registration replaces it. This permits rate-limited disruption of an unverified
-registration; the owner can register again to obtain a fresh link. Verification requires both the link and the chosen password,
+registration adds a separate link with its own password hash and chosen name. The newest
+five links are retained; issuing another evicts the oldest, so repeated registrations
+can eventually invalidate an earlier link. Verification requires both the link and the chosen password,
 so opening a link from an attacker’s registration cannot activate their credential.
 Claiming an unverified account also removes existing sessions, provider links and tokens.
-Password reset proves inbox ownership and performs the same cleanup. Legacy bcrypt and
+Password reset proves inbox ownership and removes sessions and pending tokens. It removes
+Google links from password accounts, while preserving linked identities on passwordless
+legacy accounts. Legacy bcrypt and
 unknown-account verification can still have different timing; rate limits reduce probing
 but do not eliminate that difference. Background work is not durable and can be lost on
 process failure.

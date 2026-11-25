@@ -1,17 +1,17 @@
 # Full-Stack Boilerplate
 
-A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 16** frontend
-(`apps/web`). It uses uv for Python and pnpm workspaces + Turborepo for JavaScript, runs
-locally with Docker Compose, and is tested in GitHub Actions.
+A starter monorepo with a **FastAPI** backend (`apps/api`), a **Next.js 16** frontend
+(`apps/web`) and an **Expo** (React Native) mobile app foundation (`apps/mobile`). It uses
+uv for Python and pnpm workspaces + Turborepo for JavaScript, runs locally with Docker
+Compose, and is tested in GitHub Actions.
 
 > [!WARNING]
 > **Not production-ready yet.** A v2 upgrade (multi-tenancy, background jobs, mobile app,
 > web rebuild, real deploys) is in progress as a series of PRs. Gaps in the current code:
 >
-> - Emailed links open web pages (`/auth/verify-email`, `/auth/reset-password`,
->   `/auth/confirm-email`, `/auth/forgot-password`) that the web app does not have yet;
->   they arrive with the web rebuild. Until then, post the token from the email to the API
->   (see [Authentication](#authentication)).
+> - The web app has email verification, but the forgot-password, reset-password and
+>   confirm-email pages are planned for phase 8b. Until then, post those emailed tokens
+>   to the API (see [Authentication](#authentication)).
 > - Email is sent by an in-process task after the response. A crash or SMTP outage at that
 >   moment loses the message; a durable job queue with retries is planned.
 > - Expired sessions, refresh tokens, emailed tokens and rate-limit rows are not purged yet.
@@ -23,6 +23,7 @@ locally with Docker Compose, and is tested in GitHub Actions.
 apps/
   api/            FastAPI service (Python, uv)
   web/            Next.js app (pnpm workspace package "web")
+  mobile/         Expo (React Native) app (pnpm workspace package "mobile")
 packages/
   config/         shared TypeScript, ESLint and Prettier config (@repo/config)
 docs/adr/         architecture decision records
@@ -73,12 +74,23 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   tabs where the Web Locks API exists), and sends `X-Platform: web`. Zustand auth store
   (`lib/auth-store.ts`).
 
+**Mobile (`apps/mobile`)**: foundation only; see [Mobile](#mobile). It does not call
+the API yet: no sign-in, no data.
+- Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
+  `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
+  placeholder screens (sign in, sign up, items, settings) in a tab layout.
+- Styling with React Native `StyleSheet` and typed light/dark design tokens
+  ([ADR 0006](docs/adr/0006-mobile-styling.md)).
+- `app.config.ts` driven by environment variables, `eas.json` build profiles and EAS
+  Update channels. Nothing has been built with EAS yet.
+- Jest + React Native Testing Library tests; `expo-doctor` in CI.
+
 **Tooling**
 
-- pnpm workspaces + Turborepo for `lint`, `typecheck`, `build`, `dev`
+- pnpm workspaces + Turborepo for `lint`, `typecheck`, `test`, `build`, `dev`
   ([ADR 0002](docs/adr/0002-js-monorepo-pnpm-turborepo.md)).
-- Formatting: ruff format (Python) and Prettier (`apps/web`, `packages`), both enforced
-  in CI.
+- Formatting: ruff format (Python) and Prettier (`apps/web`, `apps/mobile`, `packages`),
+  both enforced in CI.
 - Docker images ([ADR 0003](docs/adr/0003-container-images.md)):
   - API: multi-stage; the default `runtime` target is slim (no compilers, uv, pip or
     tests) and runs as an unprivileged user; a `dev` target is used by Compose.
@@ -89,12 +101,13 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   `mailpit` (SMTP on 1025, inbox UI on 8025). The API sends its email to Mailpit.
 - `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
   and local DBs (at any depth) out of images.
-- GitHub Actions (`.github/workflows/ci.yml`), with every third-party action pinned to a
-  commit SHA:
+- GitHub Actions (`.github/workflows/ci.yml` and `mobile.yml`), with every third-party
+  action pinned to a commit SHA:
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
     drift check, and pytest on Postgres 16 with a 96.0% branch-aware coverage gate.
   - **web**: `pnpm install --frozen-lockfile`, Prettier check, then ESLint, `tsc` and
-    `next build` via Turborepo, Vitest, and Playwright against the standalone build;
+    `next build` via Turborepo (ESLint and `tsc` run for every JS package, including
+    mobile), Vitest, and Playwright against the standalone build;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
     mailpit, api and web as packaged, and require all to be healthy. The API smoke uses
@@ -107,6 +120,9 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
     responses and one-hour cache headers from both association URLs. It checks security
     headers and the runtime values in the privacy and account deletion pages. The API and
     web must run as unprivileged users with no mounts. Locally use `make smoke`.
+  - **mobile** (`mobile.yml`, only when `apps/mobile`, `packages`, the lockfile or root
+    JS config change): Prettier check, `tsc`, ESLint, Jest and `expo-doctor`, each as
+    its own step.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -181,7 +197,10 @@ Revision `0003` (auth redesign) changes accounts:
   relinking. Configure `GOOGLE_AUTH_ENABLED` and your client IDs, and
   remove `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` and `FRONTEND_URL` (now
   `WEB_URL`); unknown variables are ignored.
-- Existing users start unverified and must prove inbox ownership before signing in.
+- Legacy Google-only accounts with a non-authoritative address remain unverified on
+  Google sign-in. An authoritative matching Google identity or an inbox-proof password
+  reset can verify the address; reset retains a passwordless account's Google link.
+- Existing password users start unverified and must prove inbox ownership before signing in.
   Their bcrypt hashes are upgraded to argon2id after successful verification or sign-in.
 - Old 7-day access tokens stop working: users sign in again. Set `JWT_SECRET_KEY` in
   staging and production before deploying.
@@ -297,6 +316,26 @@ standalone image directly, pass the variables to the container, for example with
   association documents are cacheable for one hour. Verify both URLs return 200 over
   HTTPS without redirects on the public domain.
 
+**Mobile** (`apps/mobile/.env` for local Expo CLI runs; template with comments in
+`apps/mobile/.env.example`). Read by `app.config.ts` and validated there: an invalid
+value fails `expo start`, `expo-doctor`, EAS Build and EAS Update. Error messages name
+the variable but never print its value. Every value is embedded in the app and readable
+by its users, so none of them may be secret. EAS CLI does **not** read `.env`; see
+[EAS](#eas-builds-and-updates).
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `APP_VARIANT` | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`). |
+| `API_URL` | `http://localhost:8000` (development only) | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls). |
+| `APP_NAME` / `APP_SLUG` | `Boilerplate` / `fullstack-boilerplate` | Display name; EAS project slug. |
+| `ANDROID_PACKAGE` | `com.example.boilerplate`; **required** for production | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release. |
+| `IOS_BUNDLE_ID` | `com.example.boilerplate`; **required** for production | Letters, digits, `-` (no `_`). Same production rules. |
+| `APP_SCHEME` | `boilerplate` | Deep-link scheme (before the variant suffix). |
+| `APP_DOMAIN` | unset | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production. |
+| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
+| `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
+| `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
+
 ## Common commands
 
 ```bash
@@ -306,10 +345,13 @@ make up / make down            # start / stop the Docker stack
 make ps / make logs            # status (including health) / follow logs
 make dev                       # api in Docker + web dev server with hot reload
 make test                      # API tests (pytest)
-make lint                      # ruff check + ESLint
-make typecheck                 # mypy + tsc
+make lint                      # ruff check + ESLint (web, mobile)
+make typecheck                 # mypy + tsc (web, mobile)
 make fmt / make fmt-check      # ruff format + Prettier (write / check)
 make build-web                 # production build of the web app
+make mobile                    # Expo dev server for apps/mobile
+make test-mobile               # mobile unit tests (Jest)
+make doctor-mobile             # expo-doctor for apps/mobile
 make migrate                   # alembic upgrade head from the host
 make migrate-compose           # alembic upgrade head in a one-off Compose container
 make migration name=add_column # autogenerate a migration
@@ -320,9 +362,9 @@ make smoke                     # packaged containers, health and production API/
 
 ## Authentication
 
-Design records: [ADR 0006](docs/adr/0006-auth-tokens-and-sessions.md) (tokens, sessions,
-web and mobile transport), [ADR 0007](docs/adr/0007-google-id-token-sign-in.md) (Google
-sign-in and account linking) and [ADR 0008](docs/adr/0008-rate-limits-email-audit.md)
+Design records: [ADR 0008](docs/adr/0008-auth-tokens-and-sessions.md) (tokens, sessions,
+web and mobile transport), [ADR 0009](docs/adr/0009-google-id-token-sign-in.md) (Google
+sign-in and account linking) and [ADR 0010](docs/adr/0010-rate-limits-email-audit.md)
 (rate limits, email delivery, audit log, enumeration resistance).
 
 | Endpoint                                | Purpose                                                                                     |
@@ -378,7 +420,8 @@ optional and off by default.
 
 **Email verification.** Password sign-in requires a verified address. Registration
 sends a link tied to the chosen password; the recipient enters that password to verify.
-A new registration for an unverified address replaces the pending credential and link.
+Up to five pending links remain valid, each bound to its own password and chosen name;
+issuing another evicts the oldest. A successful claim invalidates the rest.
 Claiming an unverified account revokes earlier sessions and removes untrusted links and
 tokens. Links put tokens in the URL fragment (`#token=`), so servers do not receive them.
 
@@ -475,6 +518,201 @@ signed tokens and a mocked certificate endpoint) have their own tests. CI applie
 migrations to its Postgres 16 service, runs `alembic check` for schema drift and runs
 the same suite. Plain pytest, `make test` and CI share the 96.0% branch-aware coverage
 gate in `apps/api/pyproject.toml`, with greenlet and thread tracing enabled.
+
+Mobile unit tests (Jest + React Native Testing Library, no device needed):
+`make test-mobile`. They cover the design tokens (including WCAG AA contrast), the secure
+token storage wrapper, the persisted query cache, network status and the offline banner,
+the app config validation, the Android manifest that `expo prebuild` would generate, and
+routing tests that render the real `src/app` tree.
+
+## Mobile
+
+`apps/mobile` is an Expo SDK 58 app. This is the foundation only: screens are
+placeholders, and nothing calls the API yet. Auth, the generated API client and real
+data arrive in later phases.
+
+### Running it
+
+You need an Android emulator (Android Studio), an iOS simulator (Xcode, macOS only) or a
+physical device.
+
+```bash
+make setup                                    # once: installs all JS dependencies
+cp apps/mobile/.env.example apps/mobile/.env  # optional; set API_URL for your target
+make mobile                                   # = pnpm --filter mobile start
+```
+
+Because `expo-dev-client` is installed, `expo start` serves a development build by
+default. To use Expo Go instead, press `s` to switch, then `a` (Android emulator) or `i`
+(iOS simulator), or scan the QR code with Expo Go on a device on the same network. `API_URL` must be reachable from the
+device: `http://10.0.2.2:8000` from the Android emulator, `http://localhost:8000` from the
+iOS simulator, `http://<your LAN IP>:8000` from a physical device.
+
+**Expo Go vs development builds.** Expo Go only contains the native modules bundled with
+the Expo SDK. Every native dependency the app uses today is an Expo SDK module or one
+whose version `expo install` resolves for SDK 58. Later features (for example native
+Google Sign-In) need modules Expo Go doesn't have. From then on, use a development build,
+which is your app with `expo-dev-client`:
+
+```bash
+cd apps/mobile
+pnpm exec expo run:android   # local build; needs the Android SDK. Or: expo run:ios
+# or in the cloud: pnpm exec eas build --profile development --platform android (see EAS below)
+```
+
+`expo run:*` generates `android/` and `ios/` (Continuous Native Generation). They are
+git-ignored. Configure native behaviour in `app.config.ts` and config plugins, not by
+editing those folders.
+
+### Layout
+
+```
+apps/mobile/
+  app.config.ts            env-driven Expo config (validated; see the env table above)
+  eas.json                 EAS Build profiles and EAS Update channels
+  src/app/                 routes (Expo Router)
+    _layout.tsx            providers, theme, offline banner, root stack
+    index.tsx              redirects to /sign-in (no session handling yet)
+    (auth)/                sign-in, sign-up (stack with headers)
+    (app)/                 items, settings (bottom tabs)
+  src/components/          Screen, KeyboardAvoidingForm, TextField, Button, NetworkBanner
+  src/theme/               design tokens + useTheme (ADR 0006)
+  src/lib/                 runtime env, query client, network status, token storage,
+                           API client headers
+```
+
+### What the foundation provides
+
+- **Safe areas and edge-to-edge.** Expo SDK 54+ apps are always edge-to-edge on Android
+  (and Android 15+ enforces it for apps targeting API 35), so content draws behind the
+  system bars. `Screen` pads with safe-area insets per edge; headers and the tab bar pad
+  their own edges. The status bar icons follow the theme.
+- **Android back button.** In the tabs, back returns to the first tab, then leaves the
+  app (`backBehavior="initialRoute"`). "Preview app screens" uses `router.replace`, so
+  back from the tabs doesn't return to sign-in. On sign-up, leaving with unsaved input
+  (hardware back, header back, iOS swipe) asks for confirmation (`usePreventRemove`);
+  "Discard" clears the input and completes the navigation. `(auth)` is anchored on
+  sign-in, so opening `/sign-up` directly still has sign-in underneath it. Android's
+  predictive back gesture is off (`predictiveBackGestureEnabled: false`).
+- **Keyboard.** Android windows no longer resize for the keyboard under edge-to-edge,
+  so `KeyboardAvoidingForm` pads itself by however much the keyboard overlaps it. It
+  measures its own bottom edge in window coordinates against the keyboard's top edge,
+  so headers and the offline banner need no offset, and it recomputes on every keyboard
+  event and every layout change (e.g. the banner appearing while the keyboard is open).
+- **Accessibility.** Inputs are labelled, buttons have roles and disabled state, screen
+  titles are headers, tabs have accessibility labels, buttons and inputs are at least
+  48 dp tall. In light and dark, the color pairs the components draw together meet WCAG
+  AA: 4.5:1 for text and 3:1 for the outlines and fills that identify controls (tested).
+- **Data layer scaffold.** TanStack Query with a cache persisted to AsyncStorage (24 h
+  max age; discarded when the app version changes). AsyncStorage is not encrypted, so
+  persistence is opt-in: only successful queries with `meta: { persist: true }` are
+  written, and mutations (whose variables can hold passwords) never are. The cache is
+  scoped per account: `AppProviders` takes a `cacheScope` (account id, or signed out),
+  each scope has its own storage entry, and other scopes' entries are deleted on
+  startup. Sign-out (phase 9b) calls `useClearQueryCache()`: it stops the scope's writes
+  (including throttled writes still queued), waits for writes in flight, then clears
+  memory and deletes the entry, so nothing can recreate it. Queries pause offline and
+  resume on reconnect; returning to the foreground refetches and re-checks
+  connectivity.
+- **Offline banner.** Shown when NetInfo reports no connection or no internet access.
+  It is an accessibility alert and a polite live region (announced on Android when it
+  appears), and it takes over the top safe-area inset while visible.
+- **Token storage** (`src/lib/token-storage.ts`): typed wrapper over `expo-secure-store`
+  (Keychain / Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`). The session (access +
+  refresh token) is one entry, so a failed write never leaves a mixed pair. Nothing
+  stores tokens yet.
+- **Android release hardening.** Android Auto Backup is off (`allowBackup: false`), and
+  permissions the app doesn't use (`SYSTEM_ALERT_WINDOW`, `VIBRATE`, legacy external
+  storage) are removed from the merged manifest (`blockedPermissions`). A test checks the
+  manifest that `expo prebuild` would generate for a production config.
+- **API headers** (`src/lib/client-headers.ts`): builds `X-App-Version` / `X-Platform`
+  values for the API's minimum-version check. Not sent yet.
+
+### EAS builds and updates
+
+| Profile | Purpose | Output | EAS environment | Update channel |
+| --- | --- | --- | --- | --- |
+| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android) | `development` | none: a dev client loads JS from your dev server |
+| `preview` | Internal testing build | APK, internal distribution | `preview` | `preview` |
+| `production` | Store build | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production` | `production` |
+
+- Build numbers are managed by EAS (`cli.appVersionSource: "remote"`). The user-facing
+  version is `APP_VERSION` in `app.config.ts`.
+- **Runtime version per variant:** `1.0.0-development`, `1.0.0-preview`,
+  `1.0.0-production`. EAS Update only delivers an update to builds with the same
+  runtime version, so an update exported with the wrong variant can never reach preview
+  or production binaries.
+- `eas.json` pins EAS's Node (26.13.1) and pnpm (12.23.0) to match the repo, and
+  `cli.version` to the root `eas-cli` devDependency (27.10.0). Run EAS CLI as
+  `pnpm exec eas` from `apps/mobile`, not a global or `@latest` install.
+
+**How EAS reads the config** (checked against `eas-cli` 27.10.0). EAS CLI evaluates
+`app.config.ts` on your machine with `.env` loading turned off, using only your shell's
+environment, and it does so *before* it fetches EAS environment variables. Build workers
+then evaluate it again with the profile's `env` from `eas.json` plus the EAS environment
+variables of the profile's `environment`; `eas update --environment <env>` uses that
+environment's variables. So:
+
+- EAS environment variables are the source of truth for builds and updates. Each
+  environment must define `APP_VARIANT` (equal to its name) and the values below.
+  `eas update` does not read `eas.json` profiles.
+- Your shell needs the same values exported for the local evaluation (a preflight).
+  Under EAS, `APP_VARIANT` has no default, and `preview`/`production` refuse to
+  evaluate without `API_URL`; production also needs real `ANDROID_PACKAGE` and
+  `IOS_BUNDLE_ID`.
+- `eas init` can't edit a dynamic `app.config.ts`: it creates the project, prints the
+  project id with a warning, and **exits non-zero** (eas-cli 27.10.0 throws after the
+  warning). Export the id as `EAS_PROJECT_ID`; `app.config.ts` then reports it, and
+  `eas init --id "$EAS_PROJECT_ID"` confirms the link and exits 0.
+
+First-time setup (needs an Expo account; none of this has been run for this repo):
+
+```bash
+cd apps/mobile
+pnpm exec eas login
+export APP_VARIANT=development          # preflight: EAS CLI reads only your shell
+pnpm exec eas init                      # creates the project, prints its id, exits non-zero
+export EAS_PROJECT_ID=<printed id> EXPO_OWNER=<your Expo account>
+pnpm exec eas init --id "$EAS_PROJECT_ID"   # "Project already linked", exits 0
+
+# Source of truth for build workers and EAS Update:
+for env in development preview production; do
+  pnpm exec eas env:set --environment "$env" --name APP_VARIANT --value "$env" --visibility plaintext
+  pnpm exec eas env:set --environment "$env" --name EAS_PROJECT_ID --value "$EAS_PROJECT_ID" --visibility plaintext
+  pnpm exec eas env:set --environment "$env" --name EXPO_OWNER --value "$EXPO_OWNER" --visibility plaintext
+done
+pnpm exec eas env:set --environment preview --name API_URL --value https://api-preview.example.com --visibility plaintext
+# production: API_URL, ANDROID_PACKAGE, IOS_BUNDLE_ID (and APP_DOMAIN / APP_LINK_PATHS if used)
+```
+
+**Builds** (keep `EAS_PROJECT_ID` / `EXPO_OWNER` exported, e.g. via your shell profile or
+direnv, and export the target's values for the local evaluation). The worker builds from
+the profile's `APP_VARIANT` and EAS environment, and refuses a variant that doesn't match
+the profile:
+
+```bash
+export APP_VARIANT=preview API_URL=https://api-preview.example.com
+pnpm exec eas build --profile preview --platform android
+```
+
+**Updates: use the release script, not `eas update` directly.** EAS overlays the hosted
+environment on your shell, so a value missing from the hosted environment silently
+falls back to the shell (for example a stale `APP_VARIANT=production` with
+`--environment development`). `pnpm release:update <preview|production>` derives the
+channel, the EAS environment and the variant from its one argument. Before publishing it
+pulls the hosted environment (`eas env:pull`, into a temp dir that is deleted again) and
+refuses to publish unless that environment defines `APP_VARIANT` equal to the target, an
+`API_URL` valid for the variant (https), the same `EAS_PROJECT_ID` as your shell, and
+(production) real app ids. It then runs `eas update` with your shell's app settings
+removed:
+
+```bash
+pnpm release:update preview --message "Fix the settings screen"
+pnpm release:update production --message "..."
+```
+
+Updates also carry the variant's runtime version (`1.0.0-<variant>`), so even an update
+published by hand with the wrong variant is ignored by the other variants' builds.
 
 ## Adding a domain entity
 
