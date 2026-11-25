@@ -23,7 +23,7 @@ after Expo's 24 hour retention. Expo being unreachable or answering 429/5xx fail
 so it retries. Push content is limited to what the queue stores safely: title up to 100
 and body up to 500 characters, and `data` with only the keys `type`, `screen`, `id`, `url`,
 string/integer/boolean values, at most 512 bytes (anything else raises `PushPayloadError`
-when enqueuing). Per-device errors, in tickets and in receipts, are classified: 
+when enqueuing). Per-device errors, in tickets and in receipts, are classified:
 `DeviceNotRegistered` deletes the device; `MessageRateExceeded` (and unreadable answers)
 queue a retry for just that device with backoff, up to 5 attempts (receipt-level retries
 use the message stored with the ticket for at most 24 hours); anything else
@@ -35,11 +35,11 @@ logs counts only), `expo` or `memory`. A retry after a partial failure can send 
 with AWS Signature Version 4 using the standard library instead of adding boto3 (a large
 dependency for two operations); the signer is checked against AWS's published example
 signature in the tests. Path-style URLs (`https://endpoint/bucket/key`) work for S3, R2 and
-MinIO. The upload URL signs the exact `Content-Type` and `Content-Length` the client
+MinIO. The upload URL signs the exact `Content-Type` and `Content-Length` the clien
 declared, so the store rejects a different type or size; the API rejects types outside
 `STORAGE_ALLOWED_CONTENT_TYPES` (exact match, no wildcards), sizes outside
 `1..STORAGE_MAX_UPLOAD_BYTES` and unsafe keys before signing. URLs live for
-`STORAGE_URL_EXPIRE_SECONDS` (600). No endpoint uses it yet; `MemoryStorage` is the test
+`STORAGE_URL_EXPIRE_SECONDS` (600). No endpoint uses it yet; `MemoryStorage` is the tes
 double and `STORAGE_BACKEND` defaults to `disabled`.
 
 **Version gate.** `GET /v1/meta` returns `min_supported_app_version` and
@@ -52,7 +52,7 @@ header must update too). Web and unidentified clients are never gated, and neith
 `-suffix` is ignored. The default minimum `0.0.0` gates nobody.
 
 **Sentry.** `sentry-sdk` 3.x, initialised in the API and the worker only when `SENTRY_DSN`
-is set (otherwise it is not even imported). Release (`SENTRY_RELEASE`, default
+is set (otherwise it is not even imported). Release (`SENTRY_RELEASE`, defaul
 `api@<version>`), environment (`ENV`) and a `service` tag are set. Sentry 3 replaced
 `send_default_pii` with `data_collection`: user info, cookies, headers, request bodies,
 query strings, DB query data and local variables are all switched off, breadcrumbs are
