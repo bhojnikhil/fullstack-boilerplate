@@ -32,7 +32,7 @@ export function TextField({ label, error, hint, ...inputProps }: TextFieldProps)
             paddingHorizontal: spacing.md,
             borderWidth: 1,
             borderRadius: radius.md,
-            borderColor: error ? colors.danger : colors.border,
+            borderColor: error ? colors.danger : colors.controlBorder,
             backgroundColor: colors.surface,
             color: colors.text,
           },

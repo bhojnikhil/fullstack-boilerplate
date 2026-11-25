@@ -4,8 +4,9 @@
  *
  * The palette mirrors the neutral (zinc) scale that shadcn/ui uses on the web,
  * so both apps share the same vocabulary: background/surface/text/muted/
- * border/primary/danger. Every foreground/background pair used together is
- * checked for WCAG AA contrast (4.5:1) in src/theme/__tests__/tokens-test.ts.
+ * border/primary/danger. src/theme/__tests__/tokens-test.ts checks every pair
+ * the components draw together against WCAG 2.2 AA: 4.5:1 for text (1.4.3)
+ * and 3:1 for the outlines that identify controls (1.4.11).
  */
 
 export type ColorSchemeName = "light" | "dark";
@@ -17,7 +18,10 @@ export interface ColorTokens {
   surface: string;
   text: string;
   textMuted: string;
+  /** Decorative separators (list dividers). No contrast requirement. */
   border: string;
+  /** Outlines that identify a control (inputs, secondary buttons): >= 3:1. */
+  controlBorder: string;
   primary: string;
   onPrimary: string;
   danger: string;
@@ -34,6 +38,7 @@ export const colors: Record<ColorSchemeName, ColorTokens> = {
     text: "#09090b",
     textMuted: "#52525b",
     border: "#d4d4d8",
+    controlBorder: "#71717a",
     primary: "#18181b",
     onPrimary: "#fafafa",
     danger: "#b91c1c",
@@ -47,6 +52,7 @@ export const colors: Record<ColorSchemeName, ColorTokens> = {
     text: "#fafafa",
     textMuted: "#a1a1aa",
     border: "#3f3f46",
+    controlBorder: "#71717a",
     primary: "#fafafa",
     onPrimary: "#18181b",
     danger: "#f87171",

@@ -31,8 +31,10 @@ Use React Native's built-in styling with a small typed token module:
   share a vocabulary even though they share no code.
 - `useTheme()` returns the tokens for the OS color scheme (`userInterfaceStyle:
   "automatic"`); `toNavigationTheme()` maps them onto Expo Router's navigation theme.
-- Tests check that light/dark define the same tokens and that every foreground/background
-  pair the components use meets WCAG AA contrast (4.5:1).
+- Tests check that light/dark define the same tokens and that the pairs the components
+  draw together meet WCAG AA: 4.5:1 for text, and 3:1 for the outlines and fills that
+  identify controls (`controlBorder` for inputs and secondary buttons; `border` is only
+  for decorative dividers).
 
 ## Consequences
 

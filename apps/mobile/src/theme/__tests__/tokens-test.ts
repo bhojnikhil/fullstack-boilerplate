@@ -19,18 +19,30 @@ function contrast(a: string, b: string): number {
   return (hi! + 0.05) / (lo! + 0.05);
 }
 
-// Foreground/background pairs the components actually render together.
-const PAIRS: [keyof ColorTokens, keyof ColorTokens][] = [
+// Text on the backgrounds the components draw it on: WCAG 1.4.3, 4.5:1.
+const TEXT_PAIRS: [keyof ColorTokens, keyof ColorTokens][] = [
   ["text", "background"],
   ["text", "surface"],
   ["textMuted", "background"],
   ["textMuted", "surface"],
   ["onPrimary", "primary"],
-  ["primary", "background"],
   ["danger", "background"],
   ["danger", "surface"],
   ["onDanger", "danger"],
   ["onWarning", "warningBackground"],
+];
+
+// Outlines/fills that identify a control, against what is on either side of
+// them: WCAG 1.4.11 non-text contrast, 3:1. Inputs are surface-filled with a
+// controlBorder (danger when invalid) on the screen background; secondary
+// buttons are background-filled with a controlBorder; primary buttons are a
+// primary fill on the background.
+const NON_TEXT_PAIRS: [keyof ColorTokens, keyof ColorTokens][] = [
+  ["controlBorder", "background"],
+  ["controlBorder", "surface"],
+  ["danger", "background"],
+  ["danger", "surface"],
+  ["primary", "background"],
 ];
 
 describe("design tokens", () => {
@@ -45,11 +57,23 @@ describe("design tokens", () => {
   });
 
   describe.each(["light", "dark"] as const)("%s scheme", (scheme) => {
-    it.each(PAIRS)("%s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
+    it.each(TEXT_PAIRS)("text %s on %s meets 4.5:1", (fg, bg) => {
       expect(contrast(colors[scheme][fg], colors[scheme][bg])).toBeGreaterThanOrEqual(
         4.5,
       );
     });
+
+    it.each(NON_TEXT_PAIRS)("control %s against %s meets 3:1", (fg, bg) => {
+      expect(contrast(colors[scheme][fg], colors[scheme][bg])).toBeGreaterThanOrEqual(
+        3,
+      );
+    });
+  });
+
+  it("would catch the old input border (regression for m5)", () => {
+    // The previous input border tokens: 1.48:1 (light) and 1.91:1 (dark).
+    expect(contrast("#d4d4d8", colors.light.surface)).toBeLessThan(3);
+    expect(contrast("#3f3f46", colors.dark.surface)).toBeLessThan(3);
   });
 
   it("maps the OS scheme to a theme, defaulting to light", () => {

@@ -29,7 +29,7 @@ export function Button({
         paddingHorizontal: spacing.lg,
         borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: primary ? colors.primary : colors.border,
+        borderColor: primary ? colors.primary : colors.controlBorder,
         backgroundColor: primary ? colors.primary : colors.background,
         opacity: disabled ? 0.5 : pressed ? 0.8 : 1,
       })}
