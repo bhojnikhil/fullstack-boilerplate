@@ -1,0 +1,49 @@
+# Fly.io configuration for the API (and, later, the worker) as process groups of
+# ONE Fly app. Deployed by .github/workflows/deploy.yml with `--app "$FLY_APP"`,
+# so `app` below is only a placeholder. Nothing here has been deployed.
+#
+# Secrets are NOT in this file. Set them once per app (see docs/deploy.md):
+#   DATABASE_URL            app role, NOT the table owner (Postgres RLS applies), pooled URL
+#   MIGRATION_DATABASE_URL  owner role, direct (non-pooled) URL; used by release_command
+#   SECRET_KEY, CORS_ORIGINS, ALLOWED_HOSTS, ...  see the README's API env table
+app = "replace-me"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  # Production image: non-root user, no build tools. Never deploy the `dev` target.
+  build-target = "runtime"
+
+[deploy]
+  # Runs in a temporary machine of the new release, with the app's secrets, before
+  # any traffic moves. A failing migration aborts the deploy and keeps the old release.
+  # Migrations use MIGRATION_DATABASE_URL (the owner role) when set (app/core/config.py).
+  release_command = "alembic upgrade head"
+  strategy = "rolling"
+
+[env]
+  ENV = "production"
+
+[processes]
+  app = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"
+  # worker = "<worker command>"   # added with the background-jobs worker; it needs no HTTP port
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["app"]

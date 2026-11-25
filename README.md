@@ -93,7 +93,7 @@ the API yet: no sign-in, no data.
   `web` (production build; rebuild to see changes, or use `make dev` for hot reload).
 - `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
   and local DBs (at any depth) out of images.
-- GitHub Actions (`.github/workflows/ci.yml` and `mobile.yml`), with every third-party
+- GitHub Actions (`.github/workflows/ci.yml`, which calls `mobile.yml`), with every third-party
   action pinned to a commit SHA:
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
     drift check, and pytest on Postgres 16 with a 96.0% branch-aware coverage gate.
@@ -110,11 +110,16 @@ the API yet: no sign-in, no data.
     URLs. It checks security headers and the runtime values in the privacy and account
     deletion pages. The API and web must run as unprivileged users with no mounts.
     Locally use `make smoke`.
-  - **mobile** (`mobile.yml`, only when `apps/mobile`, `packages`, the lockfile or root
-    JS config change): Prettier check, `tsc`, ESLint, Jest and `expo-doctor`, each as
+  - **mobile** (`mobile.yml`, called by `ci.yml` only when `apps/mobile`, `packages`, the
+    lockfile or root JS config change): Prettier check, `tsc`, ESLint, Jest and `expo-doctor`, each as
     its own step.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
-- `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
+- Deploy and release workflows (`deploy.yml`, `mobile-release.yml`, `neon-preview.yml`)
+  skip with a notice when their secrets are absent. **Nothing has been deployed or
+  released from this repository**; see [docs/deploy.md](docs/deploy.md).
+- CI is path-filtered: a `changes` job decides which of api, web, mobile, scripts and
+  docker run, and the `CI gate` job (the check to require in branch protection) fails
+  if any of them failed. Security and Pre-commit are separate workflows that always run.
 
 ## Quick start (Docker)
 
@@ -167,13 +172,19 @@ a valid identifier. The default scheme uses the project name with underscores
 turned into hyphens and an `app-` prefix if it would start with a nonletter.
 
 Package names in the lockfiles remain fixed. The script creates missing local
-env files from their corresponding `.env.example` files. For the API it
-generates a `SECRET_KEY` in `apps/api/.env` and keeps the secret marker in
-`apps/api/.env.example`. For the web and optional mobile app it creates
-`.env.local`. Existing local env files are preserved. The script
-can be rerun safely and works without `apps/mobile`. A mobile app template
-can consume the identity options by using the markers in its config or env
-example. Run `./scripts/test-customize.sh` to exercise both layouts on fixtures.
+env files from their `.env.example` files: `apps/api/.env` (with a generated
+`SECRET_KEY`; the example keeps the secret marker), `apps/web/.env.local` and
+`apps/mobile/.env`. Expo and `app.config.ts` read `apps/mobile/.env`, whose
+example carries `APP_NAME`, `APP_SLUG`, `ANDROID_PACKAGE`, `IOS_BUNDLE_ID`,
+`APP_SCHEME` and `APP_DOMAIN` markers. Run the script before copying that example
+by hand: unfilled markers are not valid values. Existing local env files are
+preserved. The script can be rerun safely with the same arguments (a second run
+with different arguments changes nothing, because the markers are already gone).
+The display name may not contain backslashes, double quotes, dollar signs or
+backticks, because it is written inside double-quoted dotenv values. The
+production Android and iOS ids must not stay under `com.example`.
+`./scripts/test-customize.sh` runs the script on fixtures and on a throwaway copy
+of this repository's tracked files (CI runs it in the `scripts` job).
 
 ## Upgrading an existing checkout
 
