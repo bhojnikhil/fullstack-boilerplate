@@ -7,7 +7,7 @@ import { api, type Item } from "@/lib/api";
 
 export default function ItemsPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, restoreSession } = useAuthStore();
   const [items, setItems] = useState<Item[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -18,12 +18,15 @@ export default function ItemsPage() {
 
   useEffect(() => {
     if (!user) {
-      router.push("/auth/login");
+      // The access token is kept in memory only; after a reload, try the refresh cookie.
+      void restoreSession().then((restored) => {
+        if (!restored) router.push("/auth/login");
+      });
       return;
     }
 
     loadItems();
-  }, [user, router]);
+  }, [user, router, restoreSession]);
 
   const loadItems = async (cursor?: string) => {
     const setLoading = cursor ? setIsLoadingMore : setIsLoading;
@@ -90,8 +93,8 @@ export default function ItemsPage() {
               <span style={{ marginRight: "1rem" }}>Welcome, {user.name}</span>
               <button
                 className="button button-secondary"
-                onClick={() => {
-                  useAuthStore.getState().logout();
+                onClick={async () => {
+                  await useAuthStore.getState().logout();
                   router.push("/");
                 }}
               >
