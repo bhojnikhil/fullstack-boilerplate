@@ -207,19 +207,23 @@ The Makefile's host-side Python targets (`test`, `migrate`, `migration`) default
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
 
-**Mobile** (`apps/mobile/.env` for local runs; template with comments in
-`apps/mobile/.env.example`). Read by `app.config.ts` at build time and validated there:
-an invalid value fails `expo start`, `expo-doctor` and EAS builds. Every value is
-embedded in the app and readable by its users, so none of them may be secret.
+**Mobile** (`apps/mobile/.env` for local Expo CLI runs; template with comments in
+`apps/mobile/.env.example`). Read by `app.config.ts` and validated there: an invalid
+value fails `expo start`, `expo-doctor`, EAS Build and EAS Update. Error messages name
+the variable but never print its value. Every value is embedded in the app and readable
+by its users, so none of them may be secret. EAS CLI does **not** read `.env`; see
+[EAS](#eas-builds-and-updates).
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `APP_VARIANT` | `development` | `development` / `preview` / `production`. Set per profile in `eas.json`. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. |
-| `API_URL` | `http://localhost:8000` (development only) | Required and `https://` for `preview` and `production`. Exposed to the app as `extra.apiUrl`; not used yet (no API calls). |
+| `APP_VARIANT` | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`). |
+| `API_URL` | `http://localhost:8000` (development only) | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls). |
 | `APP_NAME` / `APP_SLUG` | `Boilerplate` / `fullstack-boilerplate` | Display name; EAS project slug. |
-| `ANDROID_PACKAGE` / `IOS_BUNDLE_ID` | `com.example.boilerplate` | Reverse-DNS ids (before the variant suffix). |
+| `ANDROID_PACKAGE` | `com.example.boilerplate`; **required** for production | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release. |
+| `IOS_BUNDLE_ID` | `com.example.boilerplate`; **required** for production | Letters, digits, `-` (no `_`). Same production rules. |
 | `APP_SCHEME` | `boilerplate` | Deep-link scheme (before the variant suffix). |
-| `APP_DOMAIN` | unset | Bare host, e.g. `app.example.com`. Adds Android App Links intent filters (`autoVerify`, paths `/verify-email`, `/reset-password`, `/invite`) and the iOS `applinks:` associated domain. Unset: neither is added. |
+| `APP_DOMAIN` | unset | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production. |
+| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. |
 | `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
 | `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
 
@@ -261,8 +265,9 @@ to Postgres is planned for the next phase. There are no web tests yet.
 
 Mobile unit tests (Jest + React Native Testing Library, no device needed):
 `make test-mobile`. They cover the design tokens (including WCAG AA contrast), the secure
-token storage wrapper, the network banner, the app config validation, and a routing smoke
-test that renders the real `src/app` tree.
+token storage wrapper, the persisted query cache, network status and the offline banner,
+the app config validation, the Android manifest that `expo prebuild` would generate, and
+routing tests that render the real `src/app` tree.
 
 ## Mobile
 
@@ -296,7 +301,7 @@ which is your app with `expo-dev-client`:
 ```bash
 cd apps/mobile
 pnpm exec expo run:android   # local build; needs the Android SDK. Or: expo run:ios
-# or in the cloud: npx eas-cli@latest build --profile development --platform android
+# or in the cloud: pnpm exec eas build --profile development --platform android (see EAS below)
 ```
 
 `expo run:*` generates `android/` and `ios/` (Continuous Native Generation). They are
@@ -329,52 +334,106 @@ apps/mobile/
 - **Android back button.** In the tabs, back returns to the first tab, then leaves the
   app (`backBehavior="initialRoute"`). "Preview app screens" uses `router.replace`, so
   back from the tabs doesn't return to sign-in. On sign-up, leaving with unsaved input
-  (hardware back, header back, iOS swipe) asks for confirmation (`usePreventRemove`).
-  Android's predictive back gesture is off (`predictiveBackGestureEnabled: false`).
+  (hardware back, header back, iOS swipe) asks for confirmation (`usePreventRemove`);
+  "Discard" clears the input and completes the navigation. `(auth)` is anchored on
+  sign-in, so opening `/sign-up` directly still has sign-in underneath it. Android's
+  predictive back gesture is off (`predictiveBackGestureEnabled: false`).
 - **Keyboard.** `KeyboardAvoidingForm` uses `behavior="padding"` on both platforms
   (Android windows no longer resize for the keyboard under edge-to-edge) and offsets by
-  the header height.
+  the header height plus the offline banner's height while it is shown.
 - **Accessibility.** Inputs are labelled, buttons have roles and disabled state, screen
   titles are headers, tabs have accessibility labels, buttons and inputs are at least
-  48 dp tall, and the color pairs the components use meet WCAG AA contrast in light and
-  dark (tested).
-- **Data layer scaffold.** TanStack Query with its cache persisted to AsyncStorage
-  (24 h max age; discarded when the app version changes). AsyncStorage is not
-  encrypted: queries with sensitive data must set `meta: { persist: false }`. Query
-  refetching pauses offline and resumes on reconnect / app foreground.
+  48 dp tall. In light and dark, the color pairs the components draw together meet WCAG
+  AA: 4.5:1 for text and 3:1 for the outlines and fills that identify controls (tested).
+- **Data layer scaffold.** TanStack Query with a cache persisted to AsyncStorage (24 h
+  max age; discarded when the app version changes). AsyncStorage is not encrypted, so
+  persistence is opt-in: only successful queries with `meta: { persist: true }` are
+  written, and mutations (whose variables can hold passwords) never are. The cache is
+  scoped per account: `AppProviders` takes a `cacheScope` (account id, or signed out),
+  each scope has its own storage entry, and other scopes' entries are deleted on
+  startup. `clearQueryCache()` is for sign-out (phase 9b). Queries pause offline and
+  resume on reconnect; returning to the foreground refetches and re-checks
+  connectivity.
 - **Offline banner.** Shown when NetInfo reports no connection or no internet access.
   It is an accessibility alert and a polite live region (announced on Android when it
   appears), and it takes over the top safe-area inset while visible.
 - **Token storage** (`src/lib/token-storage.ts`): typed wrapper over `expo-secure-store`
-  (Keychain / Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`). Nothing stores tokens yet.
+  (Keychain / Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`). The session (access +
+  refresh token) is one entry, so a failed write never leaves a mixed pair. Nothing
+  stores tokens yet.
+- **Android release hardening.** Android Auto Backup is off (`allowBackup: false`), and
+  permissions the app doesn't use (`SYSTEM_ALERT_WINDOW`, `VIBRATE`, legacy external
+  storage) are removed from the merged manifest (`blockedPermissions`). A test checks the
+  manifest that `expo prebuild` would generate for a production config.
 - **API headers** (`src/lib/client-headers.ts`): builds `X-App-Version` / `X-Platform`
   values for the API's minimum-version check. Not sent yet.
 
-### EAS profiles
+### EAS builds and updates
 
-| Profile | Purpose | Output | Update channel |
-| --- | --- | --- | --- |
-| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android) | none: a dev client loads JS from your dev server |
-| `preview` | Internal testing build | APK, internal distribution | `preview` |
-| `production` | Store build | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production` |
+| Profile | Purpose | Output | EAS environment | Update channel |
+| --- | --- | --- | --- | --- |
+| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android) | `development` | none: a dev client loads JS from your dev server |
+| `preview` | Internal testing build | APK, internal distribution | `preview` | `preview` |
+| `production` | Store build | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production` | `production` |
 
 - Build numbers are managed by EAS (`cli.appVersionSource: "remote"`). The user-facing
-  version is `APP_VERSION` in `app.config.ts`. `runtimeVersion` uses the `appVersion`
-  policy, so an update only reaches binaries with the same version.
-- `eas.json` pins EAS's Node (26.13.1) and pnpm (12.23.0) to match the repo.
-- `preview` and `production` builds fail at config time unless `API_URL` (https) is
-  set, e.g. as an EAS environment variable.
+  version is `APP_VERSION` in `app.config.ts`.
+- **Runtime version per variant:** `1.0.0-development`, `1.0.0-preview`,
+  `1.0.0-production`. EAS Update only delivers an update to builds with the same
+  runtime version, so an update exported with the wrong variant can never reach preview
+  or production binaries.
+- `eas.json` pins EAS's Node (26.13.1) and pnpm (12.23.0) to match the repo, and
+  `cli.version` to the root `eas-cli` devDependency (27.11.0). Run EAS CLI as
+  `pnpm exec eas` from `apps/mobile`, not a global or `@latest` install.
+
+**How EAS reads the config** (checked against `eas-cli` 27.11.0). EAS CLI evaluates
+`app.config.ts` on your machine with `.env` loading turned off, using only your shell's
+environment, and it does so *before* it fetches EAS environment variables. Build workers
+then evaluate it again with the profile's `env` from `eas.json` plus the EAS environment
+variables of the profile's `environment`; `eas update --environment <env>` uses that
+environment's variables. So:
+
+- EAS environment variables are the source of truth for builds and updates. Each
+  environment must define `APP_VARIANT` (equal to its name) and the values below.
+  `eas update` does not read `eas.json` profiles.
+- Your shell needs the same values exported for the local evaluation (a preflight).
+  Under EAS, `APP_VARIANT` has no default, and `preview`/`production` refuse to
+  evaluate without `API_URL`; production also needs real `ANDROID_PACKAGE` and
+  `IOS_BUNDLE_ID`.
+- `eas init` can't edit a dynamic `app.config.ts`, so it prints the project id
+  instead; export it as `EAS_PROJECT_ID`.
 
 First-time setup (needs an Expo account; none of this has been run for this repo):
 
 ```bash
 cd apps/mobile
-npx eas-cli@latest login
-npx eas-cli@latest init                 # creates the EAS project; put its id in EAS_PROJECT_ID
-npx eas-cli@latest env:create           # API_URL, APP_DOMAIN, EAS_PROJECT_ID, ... per environment
-npx eas-cli@latest build --profile preview --platform android
-npx eas-cli@latest update --channel preview --environment preview --message "..."
+pnpm exec eas login
+export APP_VARIANT=development          # preflight: EAS CLI reads only your shell
+pnpm exec eas init                      # creates the project and prints its id
+export EAS_PROJECT_ID=<printed id> EXPO_OWNER=<your Expo account>
+
+# Source of truth for build workers and `eas update --environment`:
+for env in development preview production; do
+  pnpm exec eas env:set --environment "$env" --name APP_VARIANT --value "$env" --visibility plaintext
+  pnpm exec eas env:set --environment "$env" --name EAS_PROJECT_ID --value "$EAS_PROJECT_ID" --visibility plaintext
+  pnpm exec eas env:set --environment "$env" --name EXPO_OWNER --value "$EXPO_OWNER" --visibility plaintext
+done
+pnpm exec eas env:set --environment preview --name API_URL --value https://api-preview.example.com --visibility plaintext
+# production: API_URL, ANDROID_PACKAGE, IOS_BUNDLE_ID (and APP_DOMAIN / APP_LINK_PATHS if used)
 ```
+
+Building and publishing (keep `EAS_PROJECT_ID` / `EXPO_OWNER` exported, e.g. via your
+shell profile or direnv, and export the target variant's values):
+
+```bash
+export APP_VARIANT=preview API_URL=https://api-preview.example.com
+pnpm exec eas build --profile preview --platform android
+pnpm exec eas update --channel preview --environment preview --message "..."
+```
+
+Always pair `--channel X` with `--environment X`. A mismatch (for example
+`--environment development` on the `preview` channel) produces an update with the wrong
+runtime version, which preview builds ignore.
 
 ## Adding a domain entity
 

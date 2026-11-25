@@ -458,7 +458,12 @@ the run/build instructions and env vars. Conventions:
 - Style with `useTheme()` tokens (ADR 0005); no hard-coded colors. Pad screens with
   `<Screen edges={...}>` (edge-to-edge on Android); wrap forms in `KeyboardAvoidingForm`.
 - Build-time config comes from env in `app.config.ts`; runtime code reads it through
-  `getRuntimeEnv()` (`src/lib/env.ts`), never `process.env`.
+  `getRuntimeEnv()` (`src/lib/env.ts`), never `process.env`. Validation errors must not
+  echo values.
+- Persisted query cache is opt-in: add `meta: { persist: true }` only to queries whose
+  data may sit unencrypted on disk. Mutations are never persisted.
+- Run EAS CLI as `pnpm exec eas` (pinned devDependency); never `npx eas-cli@latest`.
+  EAS CLI ignores `.env` (README "EAS builds and updates").
 - React Native Testing Library 14: `render`, `renderHook`, `rerender` and `fireEvent.*`
   return promises; always `await` them.
 
