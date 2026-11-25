@@ -1,0 +1,8 @@
+Hi $name,
+
+Someone tried to create a $app_name account with this email address, but you already have one.
+
+Sign in: $sign_in_link
+Forgot your password? Reset it: $reset_link
+
+If this was not you, you can ignore this email.

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.exceptions import HTTPException
 
 from app.core import API_PREFIX, health
+from app.core.client import PLATFORM_HEADER
 from app.core.config import Settings
 from app.core.db import SessionFactory
 from app.core.errors import (
@@ -29,7 +30,13 @@ from app.core.middleware import (
     RequestContextMiddleware,
     TrustedHostEnvelopeMiddleware,
 )
+from app.core.ratelimit import RateLimiter, build_rate_limit_backend
+from app.integrations.email import build_email_backend
+from app.integrations.google_id_token import GoogleIdTokenVerifier
+from app.integrations.pwned_passwords import BreachedPasswordChecker
 from app.modules.auth import router as auth
+from app.modules.auth.cookies import CSRF_HEADER
+from app.modules.auth.deletion import AccountDeletionHook
 from app.modules.items import router as items
 
 
@@ -74,6 +81,15 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
     app.state.settings = config
     app.state.session_factory = sessions
     app.state.shipped_revisions = health.shipped_revisions()
+    app.state.rate_limiter = RateLimiter(build_rate_limit_backend(config, sessions), config)
+    app.state.email_backend = build_email_backend(config)
+    app.state.google_verifier = (
+        GoogleIdTokenVerifier(config.google_client_ids) if config.google_auth_enabled else None
+    )
+    app.state.breach_checker = BreachedPasswordChecker() if config.password_breach_check else None
+    # Modules that own user data register deletion hooks here (see auth/deletion.py).
+    deletion_hooks: list[AccountDeletionHook] = []
+    app.state.account_deletion_hooks = deletion_hooks
 
     configure_logging(config.env)
     app.add_middleware(BodyLimitMiddleware, limit=config.max_request_body_bytes)
@@ -83,7 +99,14 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
         allow_origins=config.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", REQUEST_ID],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            REQUEST_ID,
+            PLATFORM_HEADER,
+            CSRF_HEADER,
+        ],
         expose_headers=[REQUEST_ID],
     )
     app.add_middleware(TrustedHostEnvelopeMiddleware, allowed_hosts=config.trusted_hosts)
@@ -93,6 +116,7 @@ def create_app(config: Settings, sessions: SessionFactory | None = None) -> Fast
         responses={status: {"model": ErrorEnvelope} for status in (400, 413, 422, 500)},
     )
     api.include_router(auth.router)
+    api.include_router(auth.me_router)
     api.include_router(items.router)
     app.include_router(api)
     app.include_router(health.router)

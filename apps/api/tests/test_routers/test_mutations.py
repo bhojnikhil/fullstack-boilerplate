@@ -5,10 +5,10 @@ from uuid import uuid4
 from sqlalchemy import select, update
 
 from app.core.idempotency import IdempotencyRecord
-from app.core.security import create_access_token
 from app.modules.auth.models import User
 from app.modules.items.models import Item
 from app.modules.items.service import ItemService
+from tests.conftest import bearer, sign_in
 from tests.test_http_contract import assert_error
 
 
@@ -47,11 +47,11 @@ async def test_replays_create_update_delete_and_profile(client, auth_headers):
     assert_error(await client.get(path, headers=auth_headers), 404, "item_not_found")
 
     profile_key = keyed(auth_headers, "profile")
-    profile = await client.patch("/v1/auth/me", headers=profile_key, json={"name": "Updated"})
+    profile = await client.patch("/v1/me", headers=profile_key, json={"name": "Updated"})
     assert profile.status_code == 200
     assert profile.json()["name"] == "Updated"
     assert (
-        await client.patch("/v1/auth/me", headers=profile_key, json={"name": "Updated"})
+        await client.patch("/v1/me", headers=profile_key, json={"name": "Updated"})
     ).json() == profile.json()
 
 
@@ -101,8 +101,7 @@ async def test_same_key_is_independent_between_users(client, auth_headers, confi
     async with session_factory.begin() as session:
         other = User(email="other@example.com", name="Other")
         session.add(other)
-    token = create_access_token({"sub": str(other.id)}, config)
-    other_headers = {"Authorization": f"Bearer {token}"}
+    other_headers = bearer(await sign_in(session_factory, config, other))
     first = await client.post("/v1/items", headers=keyed(auth_headers), json={"title": "one"})
     second = await client.post("/v1/items", headers=keyed(other_headers), json={"title": "two"})
     assert second.status_code == first.status_code == 201

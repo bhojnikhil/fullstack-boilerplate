@@ -1,0 +1,5 @@
+Hi $name,
+
+The email address on your $app_name account was changed, so we will no longer send account email to this address.
+
+If you did not make this change, contact support right away.
