@@ -71,7 +71,7 @@ export interface AppEnv {
   /** Paths the app claims on appDomain; empty means no app links at all. */
   appLinkPaths: AppLinkPath[];
   easProjectId: string | undefined;
-  /** Read and exposed to the app; not wired to Sentry yet. */
+  /** Read and exposed to the app; lib/sentry.ts starts Sentry when set. */
   sentryDsn: string | undefined;
 }
 

@@ -10,7 +10,7 @@ export interface RuntimeEnv {
   appVariant: AppVariant;
   appVersion: string;
   appDomain: string | undefined;
-  /** Read but not wired to Sentry yet. */
+  /** Sentry DSN; Sentry starts only when this is set (see lib/sentry.ts). */
   sentryDsn: string | undefined;
 }
 
