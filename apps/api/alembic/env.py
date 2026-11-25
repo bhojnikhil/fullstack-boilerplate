@@ -4,11 +4,13 @@ from sqlalchemy import create_engine, pool
 
 from alembic import context
 
-# Import your models here to auto-generate migrations
+# Import every module that defines models so autogenerate and `alembic check` see them.
+from app.core.audit import AuditEvent  # noqa: F401
 from app.core.config import DatabaseSettings
 from app.core.idempotency import IdempotencyRecord  # noqa: F401
 from app.core.logging import configure_logging
 from app.core.models import Base
+from app.core.ratelimit import RateLimitWindow  # noqa: F401
 from app.modules.auth.models import User  # noqa: F401
 from app.modules.items.models import Item  # noqa: F401
 

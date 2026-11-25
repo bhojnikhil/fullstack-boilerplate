@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import re
 from typing import Literal, Self
 
@@ -10,9 +12,15 @@ from sqlalchemy.exc import ArgumentError
 Environment = Literal["development", "test", "staging", "production"]
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/boilerplate"
 LOCAL_SECRET = "dev-secret-key-change-in-production"
+TEST_SECRET = "test-secret-key-do-not-use-in-production-12345678"
+# Secrets published in this repository; rejected (after stripping) outside development.
+PUBLISHED_SECRETS = frozenset({LOCAL_SECRET, TEST_SECRET})
+MIN_SECRET_LENGTH = 32
 ORIGIN_PATTERN = re.compile(
     r"https?://(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]+)?", re.IGNORECASE | re.ASCII
 )
+GOOGLE_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9-]+\.apps\.googleusercontent\.com")
+JwtAlgorithm = Literal["HS256", "HS384", "HS512"]
 
 
 def postgres_url(value: str) -> URL:
@@ -23,6 +31,19 @@ def postgres_url(value: str) -> URL:
     if url.drivername not in {"postgresql", "postgresql+psycopg"}:
         raise ValueError("Database URLs must use PostgreSQL with psycopg 3")
     return url.set(drivername="postgresql+psycopg")
+
+
+def without_default_port(origin: str) -> str:
+    """Browsers omit default ports from Origin, so https://x:443 would never match."""
+    for scheme, port in (("https://", ":443"), ("http://", ":80")):
+        if origin.startswith(scheme) and origin.endswith(port):
+            return origin.removesuffix(port)
+    return origin
+
+
+def secret_value(secret: SecretStr | None) -> str:
+    """A configured secret, treating an empty environment variable as unset."""
+    return secret.get_secret_value() if secret is not None else ""
 
 
 class DatabaseSettings(BaseSettings):
@@ -46,14 +67,45 @@ class DatabaseSettings(BaseSettings):
 
 
 class Settings(DatabaseSettings):
-    secret_key: SecretStr | None = None
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = Field(default=10080, gt=0)
+    app_name: str = Field(default="Boilerplate App", min_length=1, max_length=100)
+    # Base URL of the web app. Links in emails point here (phase 8 adds the pages).
+    web_url: HttpUrl = HttpUrl("http://localhost:3000")
 
-    google_client_id: str = ""
-    google_client_secret: SecretStr = SecretStr("")
-    google_redirect_uri: HttpUrl = HttpUrl("http://localhost:8000/v1/auth/google/callback")
-    frontend_url: HttpUrl = HttpUrl("http://localhost:3000")
+    # Server-side HMAC root (IP hashes, CSRF tokens, rate-limit and audit identifiers).
+    secret_key: SecretStr | None = None
+    # Signs access tokens only. Separate from SECRET_KEY so either can be rotated alone.
+    jwt_secret_key: SecretStr | None = None
+    jwt_algorithm: JwtAlgorithm = "HS256"
+    jwt_issuer: str = Field(default="boilerplate-api", min_length=1)
+    jwt_audience: str = Field(default="boilerplate-api", min_length=1)
+    access_token_expire_minutes: int = Field(default=15, gt=0, le=60)
+    # A refresh token extends its session by this much (idle timeout) ...
+    refresh_token_expire_days: int = Field(default=30, gt=0, le=365)
+    # ... up to this absolute session lifetime, after which the user signs in again.
+    session_max_age_days: int = Field(default=90, gt=0, le=730)
+    # Account deletion, email changes and Google (un)linking need a sign-in this recent.
+    reauthentication_max_age_minutes: int = Field(default=10, gt=0, le=60)
+
+    # Optional k-anonymity lookup against Have I Been Pwned (only a SHA-1 prefix is sent).
+    password_breach_check: bool = False
+    email_token_expire_hours: int = Field(default=24, gt=0, le=168)
+    password_reset_expire_minutes: int = Field(default=30, gt=0, le=1440)
+
+    google_auth_enabled: bool = False
+    google_web_client_id: str = ""
+    google_android_client_id: str = ""
+    google_ios_client_id: str = ""
+
+    email_backend: Literal["console", "smtp", "memory"] = "console"
+    email_from: str = Field(default="Boilerplate App <no-reply@localhost>", min_length=3)
+    smtp_host: str = "localhost"
+    smtp_port: int = Field(default=1025, gt=0, lt=65536)
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_security: Literal["none", "starttls", "tls"] = "none"
+    smtp_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
+    rate_limit_backend: Literal["postgres", "memory"] = "postgres"
 
     cors_origins: list[str] = ["http://localhost:3000"]
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "[::1]"]
@@ -68,7 +120,7 @@ class Settings(DatabaseSettings):
                     "CORS origins must be explicit HTTP(S) origins (scheme://host[:port])"
                 )
             HttpUrl(origin)
-        return [origin.lower() for origin in origins]
+        return [without_default_port(origin.lower()) for origin in origins]
 
     @field_validator("trusted_hosts")
     @classmethod
@@ -78,30 +130,92 @@ class Settings(DatabaseSettings):
                 raise ValueError("Trusted host wildcards must use *.example.com")
         return hosts
 
+    @field_validator("google_web_client_id", "google_android_client_id", "google_ios_client_id")
+    @classmethod
+    def validate_google_client_id(cls, client_id: str) -> str:
+        if client_id and not GOOGLE_CLIENT_ID_PATTERN.fullmatch(client_id):
+            raise ValueError("Google client IDs end with .apps.googleusercontent.com")
+        return client_id
+
+    @property
+    def local(self) -> bool:
+        return self.env in {"development", "test"}
+
     @property
     def signing_key(self) -> str:
-        if self.secret_key is not None:
-            return self.secret_key.get_secret_value()
+        configured = secret_value(self.secret_key)
+        if configured:
+            return configured
         if self.env == "development":
             return LOCAL_SECRET
         raise ValueError("SECRET_KEY is required outside development")
 
+    @property
+    def jwt_key(self) -> str:
+        configured = secret_value(self.jwt_secret_key)
+        if configured:
+            return configured
+        # Development and test only (validated below): derive a distinct key.
+        return hmac.new(self.signing_key.encode(), b"jwt-access-token", hashlib.sha256).hexdigest()
+
+    @property
+    def google_client_ids(self) -> list[str]:
+        return [
+            client_id
+            for client_id in (
+                self.google_web_client_id,
+                self.google_android_client_id,
+                self.google_ios_client_id,
+            )
+            if client_id
+        ]
+
+    @property
+    def secure_cookies(self) -> bool:
+        # Browsers drop Secure cookies on plain-HTTP origins other than localhost.
+        return self.env != "development"
+
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
         if self.env != "development":
-            key = self.signing_key
-            if len(key.strip()) < 32 or key == LOCAL_SECRET:
+            key = self.signing_key.strip()
+            if len(key) < MIN_SECRET_LENGTH or key in PUBLISHED_SECRETS:
                 raise ValueError("SECRET_KEY must be a unique secret of at least 32 characters")
-            if self.env != "test" and key == "test-secret-key-do-not-use-in-production-12345678":
-                raise ValueError("SECRET_KEY cannot be the known test key in staging or production")
-        if self.env in {"staging", "production"} and "*" in self.trusted_hosts:
-            raise ValueError("TRUSTED_HOSTS cannot contain '*' in staging or production")
+            # Test may derive the access-token key; anything configured is checked too.
+            if not self.local or secret_value(self.jwt_secret_key):
+                self.validate_jwt_secret()
+        if not self.local:
+            if "*" in self.trusted_hosts:
+                raise ValueError("TRUSTED_HOSTS cannot contain '*' in staging or production")
+            if self.email_backend != "smtp":
+                raise ValueError("EMAIL_BACKEND must be smtp in staging and production")
+            if self.rate_limit_backend != "postgres":
+                raise ValueError("RATE_LIMIT_BACKEND must be postgres in staging and production")
+            if self.web_url.scheme != "https":
+                raise ValueError("WEB_URL must use https in staging and production")
         self.database()
         if self.migration_database_url:
             self.database(migration=True)
-        if bool(self.google_client_id) != bool(self.google_client_secret.get_secret_value()):
-            raise ValueError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together")
+        if self.google_auth_enabled and not self.google_client_ids:
+            raise ValueError(
+                "GOOGLE_AUTH_ENABLED requires at least one of GOOGLE_WEB_CLIENT_ID, "
+                "GOOGLE_ANDROID_CLIENT_ID or GOOGLE_IOS_CLIENT_ID"
+            )
+        if bool(self.smtp_username) != bool(self.smtp_password.get_secret_value()):
+            raise ValueError("SMTP_USERNAME and SMTP_PASSWORD must be set together")
         return self
+
+    def validate_jwt_secret(self) -> None:
+        jwt_secret = secret_value(self.jwt_secret_key).strip()
+        # An HMAC key should be at least as long as the digest (RFC 7518 section 3.2).
+        minimum = {"HS256": 32, "HS384": 48, "HS512": 64}[self.jwt_algorithm]
+        if len(jwt_secret.encode()) < minimum or jwt_secret in PUBLISHED_SECRETS:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be a unique secret of at least {minimum} bytes "
+                f"for {self.jwt_algorithm}"
+            )
+        if hmac.compare_digest(jwt_secret.encode(), self.signing_key.strip().encode()):
+            raise ValueError("JWT_SECRET_KEY must differ from SECRET_KEY")
 
 
 def get_settings(request: Request) -> Settings:
