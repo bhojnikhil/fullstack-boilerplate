@@ -76,7 +76,6 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 
 **Mobile (`apps/mobile`)**: foundation only; see [Mobile](#mobile). It does not call
 the API yet: no sign-in, no data.
-
 - Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
   `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
   placeholder screens (sign in, sign up, items, settings) in a tab layout.
@@ -355,18 +354,18 @@ the variable but never print its value. Every value is embedded in the app and r
 by its users, so none of them may be secret. EAS CLI does **not** read `.env`; see
 [EAS](#eas-builds-and-updates).
 
-| Variable                        | Default                                                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_VARIANT`                   | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`).                                                                                                                                                                                           |
-| `API_URL`                       | `http://localhost:8000` (development only)               | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls).                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `APP_NAME` / `APP_SLUG`         | `Boilerplate` / `fullstack-boilerplate`                  | Display name; EAS project slug.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `ANDROID_PACKAGE`               | `com.example.boilerplate`; **required** for production   | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `IOS_BUNDLE_ID`                 | `com.example.boilerplate`; **required** for production   | Letters, digits, `-` (no `_`). Same production rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `APP_SCHEME`                    | `boilerplate`                                            | Deep-link scheme (before the variant suffix).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `APP_DOMAIN`                    | unset                                                    | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production.                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `APP_LINK_PATHS`                | unset                                                    | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
-| `EAS_PROJECT_ID` / `EXPO_OWNER` | unset                                                    | From `eas init`. The project id also sets the EAS Update URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `SENTRY_DSN`                    | unset                                                    | Read into `extra.sentryDsn`; Sentry is not wired up yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `APP_VARIANT` | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`). |
+| `API_URL` | `http://localhost:8000` (development only) | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls). |
+| `APP_NAME` / `APP_SLUG` | `Boilerplate` / `fullstack-boilerplate` | Display name; EAS project slug. |
+| `ANDROID_PACKAGE` | `com.example.boilerplate`; **required** for production | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release. |
+| `IOS_BUNDLE_ID` | `com.example.boilerplate`; **required** for production | Letters, digits, `-` (no `_`). Same production rules. |
+| `APP_SCHEME` | `boilerplate` | Deep-link scheme (before the variant suffix). |
+| `APP_DOMAIN` | unset | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production. |
+| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
+| `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
+| `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
 
 ## Common commands
 
@@ -710,11 +709,11 @@ apps/mobile/
 
 ### EAS builds and updates
 
-| Profile       | Purpose                                                       | Output                                                               | EAS environment | Update channel                                   |
-| ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- | --------------- | ------------------------------------------------ |
-| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android)                                                        | `development`   | none: a dev client loads JS from your dev server |
-| `preview`     | Internal testing build                                        | APK, internal distribution                                           | `preview`       | `preview`                                        |
-| `production`  | Store build                                                   | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production`    | `production`                                     |
+| Profile | Purpose | Output | EAS environment | Update channel |
+| --- | --- | --- | --- | --- |
+| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android) | `development` | none: a dev client loads JS from your dev server |
+| `preview` | Internal testing build | APK, internal distribution | `preview` | `preview` |
+| `production` | Store build | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production` | `production` |
 
 - Build numbers are managed by EAS (`cli.appVersionSource: "remote"`). The user-facing
   version is `APP_VERSION` in `app.config.ts`.
@@ -728,7 +727,7 @@ apps/mobile/
 
 **How EAS reads the config** (checked against `eas-cli` 27.10.0). EAS CLI evaluates
 `app.config.ts` on your machine with `.env` loading turned off, using only your shell's
-environment, and it does so _before_ it fetches EAS environment variables. Build workers
+environment, and it does so *before* it fetches EAS environment variables. Build workers
 then evaluate it again with the profile's `env` from `eas.json` plus the EAS environment
 variables of the profile's `environment`; `eas update --environment <env>` uses that
 environment's variables. So:
@@ -820,4 +819,4 @@ MIT. See [LICENSE](./LICENSE).
 
 ### API client contract
 
-Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile includes an import smoke test; integration is planned for a later phase.
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile has a Jest import smoke test; Metro bundling and application integration remain unverified.
