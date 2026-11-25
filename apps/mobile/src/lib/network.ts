@@ -21,7 +21,10 @@ export function useIsOffline(): boolean {
 
 /**
  * Lets TanStack Query pause/resume with connectivity and refetch when the app
- * returns to the foreground. Returns a cleanup function.
+ * returns to the foreground. On foreground, NetInfo is asked to re-check:
+ * connectivity can change while the app is suspended without an event
+ * reaching JS, which would leave a stale banner or paused queries. Returns a
+ * cleanup function.
  */
 export function connectQueryManagers(): () => void {
   onlineManager.setEventListener((setOnline) =>
@@ -29,7 +32,15 @@ export function connectQueryManagers(): () => void {
   );
 
   const subscription = AppState.addEventListener("change", (status: AppStateStatus) => {
-    if (Platform.OS !== "web") focusManager.setFocused(status === "active");
+    const active = status === "active";
+    if (Platform.OS !== "web") focusManager.setFocused(active);
+    // refresh() notifies NetInfo listeners (useNetInfo, onlineManager) with
+    // the fresh state.
+    if (active) NetInfo.refresh().catch(() => undefined);
   });
-  return () => subscription.remove();
+  return () => {
+    subscription.remove();
+    // Stop listening to NetInfo; TanStack falls back to assuming online.
+    onlineManager.setEventListener(() => undefined);
+  };
 }

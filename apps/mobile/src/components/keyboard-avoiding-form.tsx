@@ -7,6 +7,7 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import { useOfflineBannerHeight } from "@/components/network-banner";
 import { useTheme } from "@/theme/use-theme";
 
 interface KeyboardAvoidingFormProps {
@@ -14,10 +15,16 @@ interface KeyboardAvoidingFormProps {
   /**
    * Height of anything above the form that is not part of the keyboard-avoiding
    * view, usually `useHeaderHeight()` from "expo-router/react-navigation"
-   * (which already includes the status bar).
+   * (which already includes the status bar). The offline banner's height is
+   * added automatically.
    */
   keyboardVerticalOffset?: number;
   contentContainerStyle?: StyleProp<ViewStyle>;
+}
+
+/** The given offset plus the offline banner's height while it is visible. */
+export function useKeyboardVerticalOffset(offset: number): number {
+  return offset + useOfflineBannerHeight();
 }
 
 /**
@@ -33,10 +40,11 @@ export function KeyboardAvoidingForm({
   contentContainerStyle,
 }: KeyboardAvoidingFormProps) {
   const { spacing } = useTheme();
+  const offset = useKeyboardVerticalOffset(keyboardVerticalOffset);
   return (
     <KeyboardAvoidingView
       behavior="padding"
-      keyboardVerticalOffset={keyboardVerticalOffset}
+      keyboardVerticalOffset={offset}
       style={{ flex: 1 }}
     >
       <ScrollView
