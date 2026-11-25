@@ -221,3 +221,30 @@ async def test_0003_disarms_links_from_the_old_email_matching(
             text("SELECT hashed_password FROM users WHERE id = :id"), {"id": hijacked}
         )
     assert password is None
+
+
+async def test_0003_downgrade_does_not_restore_neutralized_links(empty_db_engine):
+    await migrate(empty_db_engine, command.upgrade, "head")
+    async with empty_db_engine.begin() as connection:
+        for index, state in enumerate(("linked", "unconfirmed", "unlinked")):
+            user_id = uuid4()
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, email, name, is_active) VALUES (:id, :email, 'User', true)"
+                ),
+                {"id": user_id, "email": f"u{index}@example.com"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO oauth_accounts (id, user_id, provider, provider_account_id, state) VALUES (:id, :user_id, 'google', :subject, :state)"
+                ),
+                {"id": uuid4(), "user_id": user_id, "subject": state, "state": state},
+            )
+    await migrate(empty_db_engine, command.downgrade, "0002")
+    async with empty_db_engine.connect() as connection:
+        subjects = (
+            (await connection.execute(text("SELECT provider_account_id FROM oauth_accounts")))
+            .scalars()
+            .all()
+        )
+    assert subjects == ["linked"]

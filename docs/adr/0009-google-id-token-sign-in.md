@@ -1,4 +1,4 @@
-# 0007 Sign in with Google by ID token, and account linking
+# 0009 Sign in with Google by ID token, and account linking
 
 **Status** Accepted
 
@@ -23,8 +23,13 @@ Google address: Gmail or a Workspace hosted domain matching the email domain. A 
 explicitly after local sign-in.
 Legacy links on password accounts are unconfirmed until recovery or explicit relinking.
 Unlinking revokes sessions created through that identity and blocks automatic relinking.
+A different subject also cannot replace the tombstone automatically. An explicit link
+can replace it; because only one provider row is retained per user, that replacement
+removes the old subject’s tombstone.
 Explicit linking and unlinking require recent authentication, and unlinking requires
-another sign-in method. Google authentication time is taken from the ID token's `iat`,
+another sign-in method. Linking sends an email to the account address. Password reset
+removes linked Google identities when the account already had a password; a passwordless
+legacy account retains its linked identity. Google authentication time is taken from the ID token's `iat`,
 including for reauthentication.
 
 **Sign in with Apple** (required on iOS when other social sign-ins are offered) is not

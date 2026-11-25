@@ -4,7 +4,7 @@ Revision ID: 0004
 Revises: 0003
 Create Date: 2026-11-25 12:00:00
 
-Adds ``jobs`` (the Postgres-backed queue, see docs/adr/0009-postgres-job-queue.md),
+Adds ``jobs`` (the Postgres-backed queue, see docs/adr/0011-postgres-job-queue.md),
 ``devices`` (Expo push tokens, unique per token) and ``push_tickets`` (receipts still to
 be checked). All three are new tables, so the previous release keeps working unchanged.
 """

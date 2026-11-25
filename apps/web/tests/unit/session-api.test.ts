@@ -67,3 +67,70 @@ it("refreshes an expired access token before revoking the same session", async (
   expect(logoutCalls).toBe(2);
   expect(await api.refresh()).toBeNull();
 });
+
+it("preserves the refresh credential after a transient error", async () => {
+  let attempts = 0;
+  axios.defaults.adapter = (async (config) => {
+    if (config.url === "/v1/auth/login") return ok(config, tokens("a", "one"));
+    if (++attempts === 1)
+      throw new AxiosError("network failure", "ERR_NETWORK", config);
+    return ok(config, tokens("a", "one"));
+  }) satisfies AxiosAdapter;
+  const api = new ApiClient();
+  await api.login("a@example.com", "password");
+  await expect(api.refresh()).rejects.toThrow("network failure");
+  expect(localStorage.getItem("csrf_token")).toBe("csrf");
+  expect((await api.refresh())?.user.id).toBe("a");
+});
+
+it("surfaces logout failure and permits retry", async () => {
+  let calls = 0;
+  axios.defaults.adapter = (async (config) => {
+    if (config.url === "/v1/auth/login") return ok(config, tokens("a", "one"));
+    if (config.url === "/v1/auth/logout") {
+      if (++calls === 1) throw new AxiosError("network failure", "ERR_NETWORK", config);
+      return ok(config, {});
+    }
+    throw new Error("unexpected request");
+  }) satisfies AxiosAdapter;
+  const api = new ApiClient();
+  await api.login("a@example.com", "password");
+  await expect(api.logout()).rejects.toThrow("network failure");
+  expect(localStorage.getItem("csrf_token")).toBe("csrf");
+  await api.logout();
+  expect(calls).toBe(2);
+});
+
+it("does not clear another tab's CSRF value when logging out", async () => {
+  axios.defaults.adapter = (async (config) => {
+    if (config.url === "/v1/auth/login") return ok(config, tokens("a", "one"));
+    return ok(config, {});
+  }) satisfies AxiosAdapter;
+  const api = new ApiClient();
+  await api.login("a@example.com", "password");
+  localStorage.setItem("csrf_token", "other-session-csrf");
+  await api.logout();
+  expect(localStorage.getItem("csrf_token")).toBe("other-session-csrf");
+});
+
+it("reports an unconfirmable logout when no token or CSRF value remains", async () => {
+  axios.defaults.adapter = (async (config) => {
+    if (config.url === "/v1/auth/login") return ok(config, tokens("a", "one"));
+    return unauthorized(config);
+  }) satisfies AxiosAdapter;
+  const api = new ApiClient();
+  await api.login("a@example.com", "password");
+  await api.refresh();
+  await expect(api.logout()).rejects.toThrow("Could not confirm sign out");
+});
+
+it("clears the matching CSRF value when refresh is rejected", async () => {
+  axios.defaults.adapter = (async (config) => {
+    if (config.url === "/v1/auth/login") return ok(config, tokens("a", "one"));
+    return unauthorized(config);
+  }) satisfies AxiosAdapter;
+  const api = new ApiClient();
+  await api.login("a@example.com", "password");
+  expect(await api.refresh()).toBeNull();
+  expect(localStorage.getItem("csrf_token")).toBeNull();
+});

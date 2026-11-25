@@ -39,9 +39,13 @@ export default function ItemsPage() {
   useEffect(() => {
     if (!user) {
       // The access token is kept in memory only; after a reload, try the refresh cookie.
-      void restoreSession().then((restored) => {
-        if (!restored) router.push("/auth/login");
-      });
+      void restoreSession()
+        .then((restored) => {
+          if (!restored) router.push("/auth/login");
+        })
+        .catch(() => {
+          setError("Could not restore your session. Reload to try again.");
+        });
       return;
     }
 
@@ -82,7 +86,7 @@ export default function ItemsPage() {
   };
 
   if (!user) {
-    return null;
+    return error ? <p role="alert">{error}</p> : null;
   }
 
   return (
@@ -96,8 +100,10 @@ export default function ItemsPage() {
             onClick={async () => {
               try {
                 await useAuthStore.getState().logout();
-              } finally {
                 router.push("/");
+              } catch {
+                setError("Could not sign out. Please try again.");
+                setFailureCount((count) => count + 1);
               }
             }}
           >

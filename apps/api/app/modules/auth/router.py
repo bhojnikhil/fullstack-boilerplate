@@ -205,10 +205,11 @@ async def refresh(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, responses=errors(401, 403))
-async def logout(response: Response, context: Auth, service: Authentication) -> None:
+async def logout(context: Auth, service: Authentication) -> None:
     """Revoke the current session (its access and refresh tokens stop working)."""
+    # Refresh cookies are scoped to /refresh and may belong to another tab's
+    # session. Revocation invalidates this session without clearing that cookie.
     await service.logout(context)
-    clear_session_cookies(response, service.config)
 
 
 @router.post(

@@ -3,7 +3,7 @@
 Services call ``Mailer.send``, which renders the message and enqueues a ``send_email``
 job in the request's own transaction: the job exists only if the request commits, so a
 rolled-back request sends nothing. The worker delivers it with retries and backoff
-(docs/adr/0009-postgres-job-queue.md). Backends share one ``send`` interface; delivery
+(docs/adr/0011-postgres-job-queue.md). Backends share one ``send`` interface; delivery
 is at-least-once, so providers get a stable idempotency key per job where they support
 one.
 """

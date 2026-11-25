@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select, text
 
 from app.core.audit import AuditEvent
@@ -115,7 +116,8 @@ async def test_change_email_after_confirming_the_new_address(
         "/v1/me/email", json={"new_email": "New@Example.com"}, headers=auth_headers
     )
     assert response.status_code == 202
-    [confirmation] = outbox
+    confirmation, notice = outbox
+    assert (notice.template, notice.to) == (Template.EMAIL_CHANGE_REQUESTED, "test@example.com")
     assert (confirmation.template, confirmation.to) == (Template.EMAIL_CHANGE, "new@example.com")
     # Nothing changes until the new address is confirmed.
     assert (await client.get("/v1/me", headers=auth_headers)).json()["email"] == "test@example.com"
@@ -140,7 +142,7 @@ async def test_links_sent_to_the_previous_address_stop_working(
     await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
     reset_token = token_from(outbox[-1])
     await client.post("/v1/me/email", json={"new_email": "moved@example.com"}, headers=auth_headers)
-    await client.post("/v1/auth/email/confirm", json={"token": token_from(outbox[-1])})
+    await client.post("/v1/auth/email/confirm", json={"token": token_from(outbox[-2])})
 
     response = await client.post(
         "/v1/auth/password/reset", json={"token": reset_token, "new_password": NEW_PASSWORD}
@@ -346,7 +348,7 @@ async def test_password_reset_cancels_pending_email_changes(
     await client.post(
         "/v1/me/email", json={"new_email": "attacker@example.com"}, headers=auth_headers
     )
-    change_link = token_from(outbox[-1])
+    change_link = token_from(outbox[-2])
     await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
     reset = await client.post(
         "/v1/auth/password/reset",
@@ -409,3 +411,75 @@ async def test_email_change_and_reauthentication_are_rate_limited_per_ip(app, cl
         429,
         "rate_limited",
     )
+
+
+@pytest.mark.parametrize("action", ["password", "sessions", "unlink"])
+async def test_security_actions_invalidate_pending_tokens(
+    client, outbox, auth_headers, google, action, session_factory, test_user
+):
+    """Security actions invalidate pending email changes (R2-1)."""
+    assert (
+        await client.post(
+            "/v1/auth/google/link", json={"id_token": google.issue()}, headers=auth_headers
+        )
+    ).status_code == 204
+    assert (
+        await client.post(
+            "/v1/me/email", json={"new_email": "attacker@example.com"}, headers=auth_headers
+        )
+    ).status_code == 202
+    change_token = token_from(
+        next(e for e in reversed(outbox) if e.template == Template.EMAIL_CHANGE)
+    )
+    await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
+    from app.modules.auth.models import AccountTokenPurpose
+    from app.modules.auth.service import issue_token
+
+    async with session_factory.begin() as db:
+        user = await db.get(User, test_user.id)
+        await issue_token(
+            db, user, AccountTokenPurpose.VERIFY_EMAIL, user.email, timedelta(hours=1)
+        )
+    if action == "password":
+        response = await client.post(
+            "/v1/me/password",
+            json={"current_password": TEST_PASSWORD, "new_password": NEW_PASSWORD},
+            headers=auth_headers,
+        )
+    elif action == "sessions":
+        response = await client.post("/v1/auth/sessions/revoke-others", headers=auth_headers)
+    else:
+        response = await client.delete("/v1/auth/google/link", headers=auth_headers)
+    assert response.status_code in (200, 204)
+    async with session_factory() as db:
+        assert await db.scalar(select(func.count()).select_from(AccountToken)) == 0
+    assert_error(
+        await client.post("/v1/auth/email/confirm", json={"token": change_token}),
+        400,
+        "invalid_or_expired_token",
+    )
+
+
+@pytest.mark.parametrize("has_password,verified", [(True, True), (False, True), (False, False)])
+async def test_password_reset_removes_google_link_only_when_password_existed(
+    client, outbox, session_factory, test_password_hash, has_password, verified
+):
+    user = await create_user(
+        session_factory,
+        email="owner@example.com",
+        hashed_password=test_password_hash if has_password else None,
+        verified=verified,
+    )
+    async with session_factory.begin() as db:
+        db.add(
+            OAuthAccount(
+                user_id=user.id, provider="google", provider_account_id="linked", state="linked"
+            )
+        )
+    await client.post("/v1/auth/password/forgot", json={"email": user.email})
+    response = await client.post(
+        "/v1/auth/password/reset",
+        json={"token": token_from(outbox[-1]), "new_password": NEW_PASSWORD},
+    )
+    assert response.status_code == 204
+    assert await count(session_factory, OAuthAccount) == (0 if has_password else 1)

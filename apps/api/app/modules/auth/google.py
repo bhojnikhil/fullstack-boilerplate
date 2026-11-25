@@ -1,6 +1,6 @@
 """Sign in with Google (ID tokens), plus explicit linking and unlinking.
 
-Rules (pre-account-takeover defense, docs/adr/0007-google-id-token-sign-in.md):
+Rules (pre-account-takeover defense, docs/adr/0009-google-id-token-sign-in.md):
 
 - A Google identity with a usable link (state ``linked``) signs in to its account.
 - Anything else needs Google to vouch for the address *today*: a Gmail address, or a
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import AuditEventType
 from app.core.config import Settings
 from app.core.errors import DomainError, ErrorCode
+from app.integrations.email.templates import Template
 from app.integrations.google_id_token import (
     GoogleIdentity,
     GoogleIdTokenVerifier,
@@ -183,12 +184,15 @@ class GoogleService:
         else:
             current = await self.accounts.get_for_user(user.id, GOOGLE)
             if current is not None:
+                if automatic and current.state == OAuthLinkState.UNLINKED:
+                    raise self.fail(ErrorCode.GOOGLE_LINK_REQUIRED, "identity_unlinked", user)
                 if current.state == OAuthLinkState.LINKED:
                     raise DomainError(ErrorCode.GOOGLE_ALREADY_LINKED)
                 await self.accounts.delete(current)
             if not await self.accounts.add(user.id, GOOGLE, identity.subject):
                 raise DomainError(ErrorCode.GOOGLE_ACCOUNT_IN_USE)  # Linked concurrently.
         self.auth.audit(AuditEventType.GOOGLE_LINKED, user_id=str(user.id), automatic=automatic)
+        self.auth.mailer.send(Template.GOOGLE_LINKED, user.email, name=user.name)
 
     def mark_verified(self, user: User, identity: GoogleIdentity) -> None:
         if (
@@ -206,6 +210,8 @@ class GoogleService:
         return user
 
     async def link_to_current_user(self, context: AuthContext, id_token: str) -> None:
+        await self.auth.limiter.hit(limits.GOOGLE_LINK_PER_IP, self.auth.client.ip)
+        await self.auth.limiter.hit(limits.GOOGLE_LINK_PER_ACCOUNT, str(context.user.id))
         require_recent_authentication(context.session, self.config)
         user = await self.locked_user(context)
         if user.email_verified_at is None:
@@ -234,6 +240,7 @@ class GoogleService:
             raise DomainError(ErrorCode.LAST_SIGN_IN_METHOD)
         # Keep a tombstone: the identity must not be relinked automatically later.
         account.state = OAuthLinkState.UNLINKED
+        await auth.tokens.delete_for_user(user.id)
         revoked = await auth.session_rows.revoke_all(
             user.id, SessionRevocation.GOOGLE_UNLINKED, method=SignInMethod.GOOGLE
         )
@@ -272,7 +279,9 @@ class GoogleService:
             )
             raise DomainError(ErrorCode.REAUTHENTICATION_FAILED, commit=True)
         # Authenticated when Google issued the token, which may be a few minutes ago.
-        context.session.authenticated_at = min(identity.issued_at, datetime.now(UTC))
+        context.session.authenticated_at = max(
+            context.session.authenticated_at, min(identity.issued_at, datetime.now(UTC))
+        )
         auth.audit(
             AuditEventType.REAUTHENTICATED,
             user_id=str(user.id),

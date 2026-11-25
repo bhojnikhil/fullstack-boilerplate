@@ -20,6 +20,12 @@ apps/api/
   alembic/               database migrations
   tests/                 pytest integration and unit tests
 apps/web/                Next.js pages and axios client
+apps/mobile/             Expo SDK 58 app (foundation: placeholder screens, no API calls yet)
+  app.config.ts          env-driven, validated Expo config; eas.json build profiles
+  src/app/               Expo Router routes: (auth) sign-in/sign-up, (app) items/settings tabs
+  src/components/        Screen (safe areas), KeyboardAvoidingForm, TextField, Button, NetworkBanner
+  src/lib/               runtime env, persisted query cache, network, token storage, API headers
+  src/theme/             design tokens + useTheme (ADR 0006)
 packages/config/         shared TypeScript, ESLint and Prettier config
 docs/adr/                architecture decisions
 scripts/                 template customization and container checks
@@ -79,7 +85,7 @@ Conventions added with the auth redesign:
   Access tokens last 15 minutes and are checked against an active session on every request.
   Refresh tokens rotate on every use; reuse revokes the session. `X-Platform: web` clients
   get the refresh token as an httpOnly cookie on `/v1/auth/refresh` (CSRF: `Origin` allowlist
-  plus `X-CSRF-Token`); other clients get it in the body. See ADRs 0006 to 0008.
+  plus `X-CSRF-Token`); other clients get it in the body. See ADRs 0008 to 0010.
 - The web pages are at `/auth/login` and `/auth/register`. The web keeps the access token in
   memory and refreshes it with the cookie.
 - `/v1/items` uses the signed-in user's ID and sorts by creation time and UUID. The list response
@@ -102,6 +108,28 @@ Conventions added with the auth redesign:
   0003 requires a coordinated cutover: stop old API instances before migrating. Run
   Alembic using the direct connection when the application uses a pooler.
 
+## Mobile app (apps/mobile)
+
+README.md "Mobile" has the run/build instructions and env vars. Conventions:
+
+- Add dependencies with `npx expo install <pkg>` (SDK-compatible versions), then pin the
+  resolved version exactly in `package.json`. Run `pnpm --filter mobile run doctor:expo`.
+- Routes live in `src/app/` only; put components/hooks/libs elsewhere. Tests must not be
+  inside `src/app/` (Expo Router would treat them as routes): use `__tests__/` and the
+  `*-test.ts[x]` naming.
+- Style with `useTheme()` tokens (ADR 0006); no hard-coded colors. Pad screens with
+  `<Screen edges={...}>` (edge-to-edge on Android); wrap forms in `KeyboardAvoidingForm`.
+- Build-time config comes from env in `app.config.ts`; runtime code reads it through
+  `getRuntimeEnv()` (`src/lib/env.ts`), never `process.env`. Validation errors must not
+  echo values.
+- Persisted query cache is opt-in: add `meta: { persist: true }` only to queries whose
+  data may sit unencrypted on disk. Mutations are never persisted.
+- Run EAS CLI as `pnpm exec eas` (pinned root devDependency); never `npx eas-cli@latest`.
+  EAS CLI ignores `.env` (README "EAS builds and updates"). Publish updates only with
+  `pnpm release:update <preview|production>`, never a hand-typed `eas update`.
+- React Native Testing Library 14: `render`, `renderHook`, `rerender` and `fireEvent.*`
+  return promises; always `await` them.
+
 ## Development and checks
 
 ```bash
@@ -116,6 +144,8 @@ make smoke                        # packaged API and web in production mode: pro
                                   # email over SMTP, refresh cookie, association files
 pnpm --filter web test            # Vitest and React Testing Library
 pnpm --filter web test:e2e        # public web smoke with Playwright Chromium
+make mobile                       # Expo dev server for apps/mobile
+make test-mobile doctor-mobile    # mobile Jest tests, expo-doctor
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres

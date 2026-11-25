@@ -42,6 +42,7 @@ type RetriableRequest = InternalAxiosRequestConfig & {
 let accessToken: string | null = null;
 let refreshing: Promise<TokenResponse | null> | null = null;
 let identity: string | null = null;
+let sessionCsrf: string | null = null;
 
 function tokenIdentity(tokens: TokenResponse): string {
   try {
@@ -65,13 +66,16 @@ function storage(): Storage | null {
 function startSession(tokens: TokenResponse) {
   accessToken = tokens.access_token;
   identity = tokenIdentity(tokens);
+  sessionCsrf = tokens.csrf_token;
   if (tokens.csrf_token) storage()?.setItem(CSRF_STORAGE_KEY, tokens.csrf_token);
 }
 
 function endSession() {
   accessToken = null;
   identity = null;
-  storage()?.removeItem(CSRF_STORAGE_KEY);
+  if (sessionCsrf && storage()?.getItem(CSRF_STORAGE_KEY) === sessionCsrf)
+    storage()?.removeItem(CSRF_STORAGE_KEY);
+  sessionCsrf = null;
 }
 
 /** Run one refresh at a time across tabs: reusing a rotated refresh token signs out. */
@@ -145,9 +149,17 @@ export class ApiClient {
           },
         );
         return data;
-      } catch {
-        endSession();
-        return null;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 401) {
+          if (storage()?.getItem(CSRF_STORAGE_KEY) === csrfToken) {
+            storage()?.removeItem(CSRF_STORAGE_KEY);
+          }
+          accessToken = null;
+          identity = null;
+          sessionCsrf = null;
+          return null;
+        }
+        throw error;
       }
     }).finally(() => {
       refreshing = null;
@@ -157,6 +169,7 @@ export class ApiClient {
         // The CSRF value belongs to the shared cookie in the other tab.
         accessToken = null;
         identity = null;
+        sessionCsrf = null;
         if (typeof window !== "undefined")
           window.dispatchEvent(new Event("auth-session-changed"));
         throw new SessionChangedError();
@@ -186,18 +199,19 @@ export class ApiClient {
 
   async logout() {
     const expectedIdentity = identity;
-    try {
-      if (!accessToken && !(await this.refresh(expectedIdentity))) return;
-      try {
-        await this.client.post("/v1/auth/logout");
-      } catch (error) {
-        if (!axios.isAxiosError(error) || error.response?.status !== 401) throw error;
-        if (await this.refresh(expectedIdentity))
-          await this.client.post("/v1/auth/logout");
-      }
-    } finally {
-      endSession();
+    if (!accessToken && !(await this.refresh(expectedIdentity))) {
+      throw new Error("Could not confirm sign out. Please try again.");
     }
+    try {
+      await this.client.post("/v1/auth/logout");
+    } catch (error) {
+      if (!axios.isAxiosError(error) || error.response?.status !== 401) throw error;
+      if (!(await this.refresh(expectedIdentity))) {
+        throw new Error("Could not confirm sign out. Please try again.");
+      }
+      await this.client.post("/v1/auth/logout");
+    }
+    endSession();
   }
 
   getCurrentUser() {

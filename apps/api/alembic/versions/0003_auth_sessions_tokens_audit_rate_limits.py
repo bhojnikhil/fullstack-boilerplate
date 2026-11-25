@@ -130,6 +130,7 @@ def upgrade() -> None:
         sa.Column("token_hash", sa.String(length=64), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),
         sa.Column("password_hash", sa.String(length=255), nullable=True),
+        sa.Column("pending_name", sa.String(length=255), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "created_at",
@@ -209,6 +210,7 @@ def downgrade() -> None:
     op.add_column(
         "oauth_accounts", sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True)
     )
+    op.execute("DELETE FROM oauth_accounts WHERE state <> 'linked'")
     op.drop_column("oauth_accounts", "state")
     op.drop_constraint("uq_oauth_accounts_user_id_provider", "oauth_accounts", type_="unique")
     op.drop_column("users", "email_verified_at")

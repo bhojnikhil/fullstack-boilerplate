@@ -482,7 +482,8 @@ async def test_logout_revokes_the_session_immediately(client, session_factory, t
     headers = {"Authorization": f"Bearer {body['access_token']}"}
     response = await client.post("/v1/auth/logout", headers=headers)
     assert response.status_code == 204
-    assert cookies(response)[REFRESH_COOKIE]["max-age"] == "0"
+    # A different tab may have replaced the shared refresh cookie.
+    assert "set-cookie" not in response.headers
 
     assert_error(await client.get("/v1/me", headers=headers), 401, "invalid_token")
     refresh = await client.post("/v1/auth/refresh", json={"refresh_token": body["refresh_token"]})
@@ -607,22 +608,21 @@ async def test_expired_verification_token(client, outbox, session_factory):
     assert_error(await verify(client, token), 400, "invalid_or_expired_token")
 
 
-async def test_registering_again_replaces_the_pending_password(client, outbox, session_factory):
+async def test_pending_registrations_keep_independent_links_and_names(
+    client, outbox, session_factory
+):
     first = await register_and_verify_token(client, outbox)
     payload = {"email": "verify@example.com", "password": NEW_PASSWORD + "-2", "name": "Again"}
     await client.post("/v1/auth/register", json=payload)
     second = token_from(outbox[-1])
-    # The first link and its password are gone; only the newest registration counts.
-    assert_error(await verify(client, first), 400, "invalid_or_expired_token")
-    assert_error(await verify(client, second), 401, "invalid_credentials")
-    assert (await verify(client, second, NEW_PASSWORD + "-2")).status_code == 204
-    assert_error(
-        await login(client, email="verify@example.com", password=NEW_PASSWORD),
-        401,
-        "invalid_credentials",
-    )
-    signed_in = await login(client, email="verify@example.com", password=NEW_PASSWORD + "-2")
-    assert signed_in.json()["user"]["name"] == "Again"
+    async with session_factory() as db:
+        user = await db.scalar(select(User).where(User.email == "verify@example.com"))
+        assert user.name == "User"
+    assert_error(await verify(client, second, NEW_PASSWORD), 401, "invalid_credentials")
+    assert (await verify(client, first, NEW_PASSWORD)).status_code == 204
+    assert_error(await verify(client, second, NEW_PASSWORD + "-2"), 400, "invalid_or_expired_token")
+    signed_in = await login(client, email="verify@example.com", password=NEW_PASSWORD)
+    assert signed_in.json()["user"]["name"] == "V"
 
 
 async def test_resend_verification(client, outbox, session_factory, test_password_hash):
@@ -646,10 +646,10 @@ async def test_resend_verification(client, outbox, session_factory, test_passwor
         "/v1/auth/verify-email/resend", json={"email": "legacy@example.com"}
     )
     assert_error(limited, 429, "rate_limited")
-    # Only the newest link works.
+    # Earlier links remain valid until any one claims the account.
     tokens = [token_from(email) for email in outbox]
-    assert_error(await verify(client, tokens[0], TEST_PASSWORD), 400, "invalid_or_expired_token")
-    assert (await verify(client, tokens[-1], TEST_PASSWORD)).status_code == 204
+    assert (await verify(client, tokens[0], TEST_PASSWORD)).status_code == 204
+    assert_error(await verify(client, tokens[-1], TEST_PASSWORD), 400, "invalid_or_expired_token")
     assert (await login(client, email="legacy@example.com")).status_code == 200
 
 
@@ -810,12 +810,19 @@ async def test_reset_link_stops_working_if_the_account_is_deactivated(
 # --------------------------------------------------------------------------- races and timing
 
 
+@pytest.mark.parametrize("legacy", [False, True])
 async def test_sign_in_racing_a_password_reset_keeps_no_session(
-    client, outbox, session_factory, test_user, monkeypatch
+    client, outbox, session_factory, test_user, monkeypatch, legacy
 ):
     """A sign-in that checked the old password must not survive a reset (B3)."""
     from app.modules.auth import service as service_module
 
+    if legacy:
+        async with session_factory.begin() as db:
+            user = await db.get(User, test_user.id)
+            user.hashed_password = bcrypt.hashpw(
+                TEST_PASSWORD.encode(), bcrypt.gensalt(rounds=4)
+            ).decode()
     await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
     reset_token = token_from(outbox[-1])
     checked, release = asyncio.Event(), asyncio.Event()
@@ -844,21 +851,43 @@ async def test_sign_in_racing_a_password_reset_keeps_no_session(
     assert (await verify(NEW_PASSWORD, hashed))[0]
 
 
-async def test_concurrent_reset_links_are_serialized(client, outbox, test_user):
-    """Two valid links for one account used at once: one wins, no deadlock (M8)."""
+async def test_concurrent_reset_links_are_serialized(client, outbox, test_user, monkeypatch):
+    """Hold the first token lock while a second redemption waits on the user."""
+    from app.modules.auth.repository import AccountTokenRepository
+
     for _ in range(2):
         await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
     tokens = [token_from(email) for email in outbox]
+    locked, release = asyncio.Event(), asyncio.Event()
+    original = AccountTokenRepository.lock_valid
+    first = True
+
+    async def pause(self, purpose, digest):
+        nonlocal first
+        result = await original(self, purpose, digest)
+        if first:
+            first = False
+            locked.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(AccountTokenRepository, "lock_valid", pause)
     async with asyncio.timeout(10):
-        responses = await asyncio.gather(
-            *(
-                client.post(
-                    "/v1/auth/password/reset",
-                    json={"token": token, "new_password": f"{NEW_PASSWORD}-{index}"},
-                )
-                for index, token in enumerate(tokens)
+        one = asyncio.create_task(
+            client.post(
+                "/v1/auth/password/reset", json={"token": tokens[0], "new_password": NEW_PASSWORD}
             )
         )
+        await locked.wait()
+        two = asyncio.create_task(
+            client.post(
+                "/v1/auth/password/reset", json={"token": tokens[1], "new_password": NEW_PASSWORD}
+            )
+        )
+        await asyncio.sleep(0.1)
+        assert not two.done()
+        release.set()
+        responses = await asyncio.gather(one, two)
     assert sorted(response.status_code for response in responses) == [204, 400]
 
 
@@ -909,3 +938,29 @@ async def test_account_lookups_happen_after_the_response(
             before_response.append(list(statements))
     event.remove(test_db_engine.sync_engine, "before_cursor_execute", record)
     assert before_response[0] == before_response[1] == []
+
+
+async def test_pending_verification_links_are_bounded(client, outbox, session_factory, monkeypatch):
+    from app.modules.auth import limits
+
+    monkeypatch.setattr(
+        limits, "REGISTER_PER_ACCOUNT", Rule("test_pending", 10, timedelta(hours=1))
+    )
+    for index in range(6):
+        response = await client.post(
+            "/v1/auth/register",
+            json={
+                "email": "bounded@example.com",
+                "name": f"Owner {index}",
+                "password": NEW_PASSWORD,
+            },
+        )
+        assert response.status_code == 202
+    tokens = [token_from(email) for email in outbox]
+    async with session_factory() as db:
+        assert len((await db.scalars(select(AccountToken))).all()) == 5
+    assert_error(await verify(client, tokens[0]), 400, "invalid_or_expired_token")
+    assert (await verify(client, tokens[1])).status_code == 204
+    assert (await login(client, email="bounded@example.com", password=NEW_PASSWORD)).json()["user"][
+        "name"
+    ] == "Owner 1"
