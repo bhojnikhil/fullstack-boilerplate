@@ -196,3 +196,18 @@ it("clears a rejected refresh credential and reports unconfirmed logout", async 
   expect(localStorage.getItem("csrf_token")).toBeNull();
   await expect(api.logout()).rejects.toThrow("Could not confirm sign out");
 });
+it("silently restores a session after reload when the first request returns 401", async () => {
+  vi.resetModules();
+  localStorage.setItem("csrf_token", "csrf");
+  let calls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (request: Request) => {
+      if (request.url.endsWith("/v1/auth/refresh")) return json(tokens("a", "one"));
+      return ++calls === 1 ? json({}, 401) : json({ id: "a" });
+    }),
+  );
+  const { ApiClient: FreshClient } = await import("@/lib/api");
+  expect((await new FreshClient().getCurrentUser()).id).toBe("a");
+  expect(calls).toBe(2);
+});

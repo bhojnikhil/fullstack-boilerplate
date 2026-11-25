@@ -81,13 +81,18 @@ export class ApiClient {
       if (typeof window !== "undefined") window.location.href = "/auth/login";
     },
   });
+  private authClient = createApiClient({
+    baseUrl: API_URL,
+    credentials: "include",
+    platform: "web",
+  });
   refresh(expectedIdentity?: string | null): Promise<TokenResponse | null> {
     refreshing ??= oneAtATime(async () => {
       const csrf = storage()?.getItem(CSRF_STORAGE_KEY);
       if (!csrf) return null;
       try {
         return unwrap(
-          await this.client.POST("/v1/auth/refresh", {
+          await this.authClient.POST("/v1/auth/refresh", {
             headers: { "X-CSRF-Token": csrf },
           }),
         );

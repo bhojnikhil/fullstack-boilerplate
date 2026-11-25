@@ -76,7 +76,6 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 
 **Mobile (`apps/mobile`)**: foundation only; see [Mobile](#mobile). It does not call
 the API yet: no sign-in, no data.
-
 - Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
   `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
   placeholder screens (sign in, sign up, items, settings) in a tab layout.
@@ -126,7 +125,6 @@ the API yet: no sign-in, no data.
     its own step.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
-- `.pre-commit-config.yaml` is included but not run in CI.
 
 ## Quick start (Docker)
 
@@ -136,7 +134,7 @@ Prerequisites: Docker with Compose v2 (`docker compose`), Make, Git, OpenSSL.
 git clone https://github.com/bhojnikhil/fullstack-boilerplate myapp
 cd myapp
 
-# Fill in the remaining template placeholders (currently the app display name)
+# Fill in template placeholders
 # and create apps/api/.env (with a generated SECRET_KEY) and apps/web/.env.local.
 ./scripts/customize.sh myapp "My App" myapp.com
 
@@ -159,6 +157,38 @@ Compose publishes Postgres, the API, the web app and Mailpit on IPv4 loopback
 (`127.0.0.1`) only, on host ports 5432, 8000, 3000, 8025 (Mailpit UI) and 1025 (Mailpit
 SMTP) by default. Set `POSTGRES_PORT`, `API_PORT`, `WEB_PORT`, `MAILPIT_UI_PORT` and
 `MAILPIT_SMTP_PORT` on the command line if those ports are in use.
+
+### Customizing project identity
+
+```bash
+./scripts/customize.sh myapp \
+  --display-name "My App" \
+  --domain myapp.com \
+  --android-package com.myapp.android \
+  --ios-bundle-id com.myapp.ios \
+  --deep-link-scheme myapp
+```
+
+The script substitutes template markers written as a name inside double braces.
+The names are `PROJECT_NAME`, `DISPLAY_NAME` (also `APP_NAME`), `DOMAIN`,
+`ANDROID_PACKAGE`, `IOS_BUNDLE_ID`, and `DEEP_LINK_SCHEME`. Substitution is literal,
+so place display-name markers where the resulting text is valid for the file format.
+The positional form in the quick start still works. The domain defaults to
+`localhost`. Mobile IDs default to `com.example.<project>` with hyphens and
+underscores removed from the project name and an `app` prefix if needed for
+a valid identifier. The default scheme uses the project name with underscores
+turned into hyphens and an `app-` prefix if it would start with a nonletter.
+Display names must omit backslashes, double quotes, dollar signs, and backticks
+so they remain literal in the web and mobile env files.
+
+Package names in the lockfiles remain fixed. The script creates missing local
+env files from their corresponding `.env.example` files. For the API it
+generates a `SECRET_KEY` in `apps/api/.env` and keeps the secret marker in
+`apps/api/.env.example`. For the web and optional mobile app it creates
+`.env.local`. The mobile file receives the identity values in its existing
+configuration variables. Existing local env files are preserved. The script
+can be rerun safely and works without `apps/mobile`. Run
+`./scripts/test-customize.sh` to exercise both layouts on fixtures.
 
 ## Upgrading an existing checkout
 
@@ -324,24 +354,25 @@ the variable but never print its value. Every value is embedded in the app and r
 by its users, so none of them may be secret. EAS CLI does **not** read `.env`; see
 [EAS](#eas-builds-and-updates).
 
-| Variable                        | Default                                                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_VARIANT`                   | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`).                                                                                                                                                                                           |
-| `API_URL`                       | `http://localhost:8000` (development only)               | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls).                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `APP_NAME` / `APP_SLUG`         | `Boilerplate` / `fullstack-boilerplate`                  | Display name; EAS project slug.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `ANDROID_PACKAGE`               | `com.example.boilerplate`; **required** for production   | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `IOS_BUNDLE_ID`                 | `com.example.boilerplate`; **required** for production   | Letters, digits, `-` (no `_`). Same production rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `APP_SCHEME`                    | `boilerplate`                                            | Deep-link scheme (before the variant suffix).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `APP_DOMAIN`                    | unset                                                    | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production.                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `APP_LINK_PATHS`                | unset                                                    | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
-| `EAS_PROJECT_ID` / `EXPO_OWNER` | unset                                                    | From `eas init`. The project id also sets the EAS Update URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `SENTRY_DSN`                    | unset                                                    | Read into `extra.sentryDsn`; Sentry is not wired up yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `APP_VARIANT` | `development` for local Expo CLI; **required** under EAS | `development` / `preview` / `production`. Under EAS CLI or on an EAS Build worker there is no default, and on a worker it must match a profile named after a variant. Non-production variants get `.dev` / `.preview` id suffixes, `-dev` / `-preview` scheme suffixes and a name suffix, so they install side by side. Also selects the runtime version (`1.0.0-<variant>`). |
+| `API_URL` | `http://localhost:8000` (development only) | Required and `https://` for `preview` and `production`. No credentials, query string or fragment. Exposed to the app as `extra.apiUrl`; not used yet (no API calls). |
+| `APP_NAME` / `APP_SLUG` | `Boilerplate` / `fullstack-boilerplate` | Display name; EAS project slug. |
+| `ANDROID_PACKAGE` | `com.example.boilerplate`; **required** for production | Java package rules (letters, digits, `_`). Production rejects the `com.example` placeholder (Google Play does too). It can't change after the first Play release. |
+| `IOS_BUNDLE_ID` | `com.example.boilerplate`; **required** for production | Letters, digits, `-` (no `_`). Same production rules. |
+| `APP_SCHEME` | `boilerplate` | Deep-link scheme (before the variant suffix). |
+| `APP_DOMAIN` | unset | Bare host for App Links / universal links, e.g. `app.example.com`. Has no effect without `APP_LINK_PATHS`. Use different hosts for preview and production. |
+| `APP_LINK_PATHS` | unset | Explicit opt-in: comma-separated paths the app claims on `APP_DOMAIN`. `/verify-email` matches exactly, `/invite/` matches whole segments below it. No wildcards; `/privacy`, `/terms`, `/account-deletion` and `/.well-known` are always refused. Adds the Android `autoVerify` intent filter and the iOS `applinks:` domain. The web app's `IOS_APPLINK_PATHS` (AASA globs) must cover the same paths: `/verify-email` there for `/verify-email` here, `/invite/*` for `/invite/`. Its `ANDROID_PACKAGE_NAME` is the installed package, including the variant suffix. |
+| `EAS_PROJECT_ID` / `EXPO_OWNER` | unset | From `eas init`. The project id also sets the EAS Update URL. |
+| `SENTRY_DSN` | unset | Read into `extra.sentryDsn`; Sentry is not wired up yet. |
 
 ## Common commands
 
 ```bash
 make help                      # list all targets
 make setup                     # install locked Python + JS dependencies
+make hooks                     # install the Git pre-commit hook
 make up / make down            # start / stop the Docker stack
 make ps / make logs            # status (including health) / follow logs
 make dev                       # api in Docker + web dev server with hot reload
@@ -360,6 +391,53 @@ make db-shell                  # psql into the dev database
 make fresh                     # wipe the DB volume, rebuild, start
 make smoke                     # packaged containers, health and production API/web checks
 ```
+
+## Security checks
+
+Security checks run on PRs, pushes to `main`, and Mondays at 06:23 UTC.
+The jobs use SHA-pinned Actions and read-only contents access.
+[`security.yml`](.github/workflows/security.yml) · [ADR 0011](docs/adr/0011-security-checks.md)
+
+| Check | Coverage and failure condition |
+| --- | --- |
+| Gitleaks | Scans PR commits from the base SHA to the head SHA. On `main` pushes and the weekly run, scans the full fetched history across branches and tags. Reports matches with secret values redacted. |
+| GitHub Dependency Review | Runs on PRs and fails on newly introduced known vulnerabilities at low severity or higher in the dependency graph. Requires the repository's **Dependency graph** setting. |
+| pip-audit | Exports exact versions and hashes from `apps/api/uv.lock`, including development groups. Fails on known vulnerabilities reported for the export by the advisory service. |
+| pnpm audit | Audits the workspace lockfile's production dependencies and fails on high or critical advisories. |
+
+Dependency Review needs the repository's dependency graph. Enable it in
+**Settings → Advanced Security → Dependency Graph**, then rerun the job. If the
+dependency graph API returns 403 or 404, the job reports a warning and skips
+the review. Other API errors still fail the job.
+
+To scan history locally with Gitleaks 8.30.1 installed, fetch `origin` and run
+`gitleaks git --redact --log-opts="--diff-merges=first-parent --remotes=origin --tags HEAD" .`.
+For a confirmed credential exposure, revoke or rotate the credential and
+remove it from current code. Review the affected commit range before deciding
+how to clean up published history.
+
+## Pre-commit
+
+Install the repository's pinned tools (uv and pnpm are listed under Host
+development), then enable the hook from the repository root.
+
+```bash
+make setup
+uv tool install pre-commit==4.7.0
+make hooks
+pre-commit run --all-files
+```
+
+Ruff check and format use the API lockfile, as does mypy. Prettier formats staged
+files in the JS workspaces, and ESLint runs workspace lint scripts through
+Turborepo. The hooks also check YAML, JSON, large files and private keys, fix
+trailing whitespace and missing final newlines, and scan staged changes with
+Gitleaks. Pre-commit provisions the Gitleaks hook's Go environment if needed.
+Review and re-stage any fixes before committing.
+
+CI runs `pre-commit run --all-files` on PRs and pushes to `main`. Gitleaks'
+hook reads the Git index diff, so the Security workflow scans committed changes
+in CI. [`pre-commit.yml`](.github/workflows/pre-commit.yml)
 
 ## Authentication
 
@@ -631,11 +709,11 @@ apps/mobile/
 
 ### EAS builds and updates
 
-| Profile       | Purpose                                                       | Output                                                               | EAS environment | Update channel                                   |
-| ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- | --------------- | ------------------------------------------------ |
-| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android)                                                        | `development`   | none: a dev client loads JS from your dev server |
-| `preview`     | Internal testing build                                        | APK, internal distribution                                           | `preview`       | `preview`                                        |
-| `production`  | Store build                                                   | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production`    | `production`                                     |
+| Profile | Purpose | Output | EAS environment | Update channel |
+| --- | --- | --- | --- | --- |
+| `development` | Development client (`expo-dev-client`), internal distribution | APK (Android) | `development` | none: a dev client loads JS from your dev server |
+| `preview` | Internal testing build | APK, internal distribution | `preview` | `preview` |
+| `production` | Store build | AAB (Android); `versionCode` / `buildNumber` auto-incremented by EAS | `production` | `production` |
 
 - Build numbers are managed by EAS (`cli.appVersionSource: "remote"`). The user-facing
   version is `APP_VERSION` in `app.config.ts`.
@@ -649,7 +727,7 @@ apps/mobile/
 
 **How EAS reads the config** (checked against `eas-cli` 27.10.0). EAS CLI evaluates
 `app.config.ts` on your machine with `.env` loading turned off, using only your shell's
-environment, and it does so _before_ it fetches EAS environment variables. Build workers
+environment, and it does so *before* it fetches EAS environment variables. Build workers
 then evaluate it again with the profile's `env` from `eas.json` plus the EAS environment
 variables of the profile's `environment`; `eas update --environment <env>` uses that
 environment's variables. So:
@@ -741,4 +819,4 @@ MIT. See [LICENSE](./LICENSE).
 
 ### API client contract
 
-Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile includes an import smoke test; integration is planned for a later phase.
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile has a Jest import smoke test; Metro bundling and application integration remain unverified.
