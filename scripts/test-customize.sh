@@ -32,6 +32,16 @@ TEMPLATE
     [[ ! -e apps/mobile ]] || fail "customize.sh created a missing mobile app"
 )
 
+mkdir -p "$WORK/default-mobile/scripts" "$WORK/default-mobile/apps/mobile"
+cp "$ROOT/scripts/customize.sh" "$WORK/default-mobile/scripts/customize.sh"
+cp "$ROOT/apps/mobile/.env.example" "$WORK/default-mobile/apps/mobile/.env.example"
+(
+    cd "$WORK/default-mobile"
+    ./scripts/customize.sh my_app --display-name 'My App' >/dev/null
+    expect_line apps/mobile/.env.local 'APP_SLUG=my-app'
+    expect_line apps/mobile/.env.local 'APP_DOMAIN='
+)
+
 mkdir "$WORK/flags"
 cd "$WORK/flags"
 mkdir -p scripts apps/api/app apps/web/node_modules/vendored apps/mobile/.expo packages/config
@@ -45,12 +55,20 @@ SECRET_KEY={{GENERATE_SECRET_KEY}}
 TEMPLATE
 cat > apps/web/.env.example <<'TEMPLATE'
 NEXT_PUBLIC_API_URL=http://localhost:8000
+WEB_LEGAL_APP_NAME="{{APP_NAME}}"
+WEB_LEGAL_DOMAIN={{DOMAIN}}
 TEMPLATE
 cat > apps/mobile/.env.example <<'TEMPLATE'
 EXPO_PUBLIC_ANDROID_PACKAGE={{ANDROID_PACKAGE}}
 EXPO_PUBLIC_IOS_BUNDLE_ID={{IOS_BUNDLE_ID}}
 EXPO_PUBLIC_DEEP_LINK_SCHEME={{DEEP_LINK_SCHEME}}
 EXPO_PUBLIC_APP_DOMAIN={{DOMAIN}}
+APP_NAME=
+APP_SLUG=
+ANDROID_PACKAGE=
+IOS_BUNDLE_ID=
+APP_SCHEME=
+APP_DOMAIN=
 TEMPLATE
 cat > packages/config/branding.mjs <<'TEMPLATE'
 export const project = "{{PROJECT_NAME}}";
@@ -66,6 +84,10 @@ expect_invalid() {
 
 before=$(snapshot)
 expect_invalid --display-name $'Broken\nName'
+expect_invalid --display-name 'Broken\Name'
+expect_invalid --display-name 'Broken"Name'
+expect_invalid --display-name 'Broken$Name'
+expect_invalid --display-name 'Broken`Name'
 expect_invalid --domain 'https://acme.example.com'
 expect_invalid --android-package 'com.42app'
 expect_invalid --ios-bundle-id 'com.acme_app'
@@ -74,7 +96,7 @@ expect_invalid --domain
 expect_invalid --unknown
 [[ "$before" == "$(snapshot)" ]] || fail "invalid options modified files"
 
-APP_NAME='Acme & Sons | Co/Ltd \ Group'
+APP_NAME='Acme & Sons | Co/Ltd'
 options=(acme-app --display-name "$APP_NAME" --domain acme.example.com
     --android-package com.acme.android --ios-bundle-id com.acme.ios-app --deep-link-scheme acme.app)
 # Call from outside the fixture root to verify path resolution.
@@ -87,7 +109,27 @@ expect_line apps/mobile/.expo/settings.json '{"slug":"{{PROJECT_NAME}}"}'
 expect_line apps/api/.env.example 'SECRET_KEY={{GENERATE_SECRET_KEY}}'
 grep -qE '^SECRET_KEY=[0-9a-f]{64}$' apps/api/.env || fail "API env has no generated secret"
 cmp -s apps/web/.env.example apps/web/.env.local || fail "web env not copied"
-cmp -s apps/mobile/.env.example apps/mobile/.env.local || fail "mobile env not copied"
+expect_line apps/web/.env.local "WEB_LEGAL_APP_NAME=\"$APP_NAME\""
+if docker compose version >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    cat >> apps/web/.env.local <<'TEMPLATE'
+NODE_ENV=development
+HOSTNAME=localhost
+PORT=3308
+TEMPLATE
+    docker compose -f "$ROOT/docker-compose.yml" --project-directory "$WORK/flags" config --format json \
+        | jq -e --arg name "$APP_NAME" '.services.web.environment |
+            .WEB_LEGAL_APP_NAME == $name and .NODE_ENV == "production" and
+            .HOSTNAME == "0.0.0.0" and .PORT == "3000"' >/dev/null \
+        || fail "Compose did not preserve the app name and standalone runtime settings"
+elif [ -n "${CI:-}" ]; then
+    fail "the Compose regression check requires Docker Compose and jq in CI"
+fi
+expect_line apps/mobile/.env.local "APP_NAME=\"$APP_NAME\""
+expect_line apps/mobile/.env.local 'APP_SLUG=acme-app'
+expect_line apps/mobile/.env.local 'ANDROID_PACKAGE=com.acme.android'
+expect_line apps/mobile/.env.local 'IOS_BUNDLE_ID=com.acme.ios-app'
+expect_line apps/mobile/.env.local 'APP_SCHEME=acme.app'
+expect_line apps/mobile/.env.local 'APP_DOMAIN=acme.example.com'
 expect_line apps/mobile/.env.local 'EXPO_PUBLIC_ANDROID_PACKAGE=com.acme.android'
 expect_line apps/mobile/.env.local 'EXPO_PUBLIC_IOS_BUNDLE_ID=com.acme.ios-app'
 expect_line apps/mobile/.env.local 'EXPO_PUBLIC_DEEP_LINK_SCHEME=acme.app'

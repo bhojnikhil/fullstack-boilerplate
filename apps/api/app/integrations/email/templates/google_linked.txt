@@ -1,0 +1,3 @@
+Hello $name,
+
+A Google sign-in was linked to your $app_name account. If this was not you, reset your password immediately.

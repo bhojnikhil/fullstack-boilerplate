@@ -54,10 +54,11 @@ COPY --from=dev-builder /opt/venv /opt/venv
 COPY . .
 # Runs as root on purpose: the source is bind-mounted from the host in
 # development and tools write caches/reports into it. Never deploy this target.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--reload"]
 
 # ---------------------------------------------------------------------------
 FROM base AS runtime
+ENV ENV=production
 # pip ships with the base image but is never needed at runtime.
 RUN python -m pip uninstall --yes --quiet pip \
     && groupadd --system --gid 10001 app \
@@ -67,4 +68,4 @@ COPY --from=builder /opt/venv /opt/venv
 # Root-owned and read-only for the app user.
 COPY --from=app-files /src/ ./
 USER app:app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

@@ -1,60 +1,54 @@
-"""Tests for UserRepository."""
+"""Tests for the auth repositories against Postgres."""
+
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.security import hash_password
-from app.models.user import User
-from app.repositories.user import UserRepository
+from app.modules.auth.models import User
+from app.modules.auth.repository import UserRepository
 
 
 @pytest.fixture
-def user_repo(test_db: Session) -> UserRepository:
-    """Create user repository."""
+def user_repo(test_db: AsyncSession) -> UserRepository:
     return UserRepository(test_db)
 
 
-def test_create_user(user_repo: UserRepository):
-    """Test creating a user."""
-    user = user_repo.create(
-        email="newuser@example.com",
-        name="New User",
-        hashed_password=hash_password("password123"),
-    )
-
-    assert user.email == "newuser@example.com"
-    assert user.name == "New User"
+async def test_create_and_get_user(user_repo: UserRepository):
+    user = await user_repo.create("new@example.com", "New User")
+    assert user is not None
+    assert user.hashed_password is None  # Passwords are only set once verified.
+    assert user.email == "new@example.com"
     assert user.is_active is True
+    assert user.email_verified is False
+    assert user.created_at is not None
+    assert await user_repo.get_by_id(user.id) is user
 
 
-def test_get_user_by_email(user_repo: UserRepository, test_user: User):
-    """Test getting user by email."""
-    user = user_repo.get_by_email(test_user.email)
+async def test_create_returns_none_for_any_case_of_an_existing_email(
+    user_repo: UserRepository, test_user: User
+):
+    assert await user_repo.create("TEST@Example.com", "Someone Else") is None
 
+
+async def test_lookup_ignores_case_including_legacy_rows(user_repo: UserRepository, test_db):
+    # Earlier releases stored emails as typed; lookups must still find them.
+    await test_db.execute(
+        text(
+            "INSERT INTO users (id, email, name, is_active) "
+            "VALUES (gen_random_uuid(), 'Legacy.Case@Example.com', 'Legacy', true)"
+        )
+    )
+    found = await user_repo.get_by_email("legacy.case@example.com")
+    assert found is not None
+    assert found.email == "Legacy.Case@Example.com"
+    assert await user_repo.get_by_email("nobody@example.com") is None
+
+
+async def test_verified_flag(user_repo: UserRepository):
+    user = await user_repo.create(
+        "verified@example.com", "Verified", email_verified_at=datetime.now(UTC)
+    )
     assert user is not None
-    assert user.email == test_user.email
-    assert user.name == test_user.name
-
-
-def test_get_user_by_id(user_repo: UserRepository, test_user: User):
-    """Test getting user by ID."""
-    user = user_repo.get_by_id(test_user.id)
-
-    assert user is not None
-    assert user.id == test_user.id
-    assert user.email == test_user.email
-
-
-def test_get_nonexistent_user(user_repo: UserRepository):
-    """Test getting nonexistent user."""
-    user = user_repo.get_by_email("nonexistent@example.com")
-    assert user is None
-
-
-def test_update_user(user_repo: UserRepository, test_user: User):
-    """Test updating user."""
-    updated = user_repo.update(user=test_user, name="Updated Name")
-
-    assert updated is not None
-    assert updated.name == "Updated Name"
-    assert updated.id == test_user.id
+    assert user.email_verified is True

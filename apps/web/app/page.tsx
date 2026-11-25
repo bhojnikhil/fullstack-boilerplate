@@ -1,56 +1,30 @@
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { appName } from "@/lib/public-settings";
 
 export default function Home() {
   return (
-    <>
-      <header className="header">
-        <div className="container">
-          <h1>Boilerplate App</h1>
+    <section className="relative overflow-hidden rounded-2xl border bg-card px-6 py-14 sm:px-14 sm:py-20">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-0 hidden w-2/5 bg-[linear-gradient(var(--border)_1px,transparent_1px),linear-gradient(90deg,var(--border)_1px,transparent_1px)] bg-size-[24px_24px] mask-l-from-10% sm:block"
+      />
+      <div className="relative max-w-2xl">
+        <h1 className="text-4xl leading-tight font-semibold tracking-tight sm:text-6xl">
+          {appName()}
+        </h1>
+        <p className="mt-5 max-w-md text-lg leading-relaxed text-muted-foreground">
+          A Next.js and FastAPI starter with user accounts and an example items page.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Button asChild size="lg">
+            <Link href="/auth/register">Create an account</Link>
+          </Button>
+          <Button asChild size="lg" variant="outline">
+            <Link href="/items">Open items</Link>
+          </Button>
         </div>
-      </header>
-
-      <main className="main">
-        <div className="container">
-          <div className="card">
-            <h2>Welcome to Boilerplate App</h2>
-            <p>
-              This is a full-stack boilerplate with Next.js frontend and FastAPI
-              backend.
-            </p>
-
-            <div style={{ marginTop: "2rem", display: "flex", gap: "1rem" }}>
-              <Link href="/auth/login" className="button">
-                Login
-              </Link>
-              <Link href="/auth/register" className="button button-secondary">
-                Register
-              </Link>
-              <Link href="/items" className="button button-secondary">
-                Items
-              </Link>
-            </div>
-
-            <div style={{ marginTop: "2rem" }}>
-              <h3>Getting Started</h3>
-              <ol>
-                <li>
-                  Run migrations: <code>alembic upgrade head</code>
-                </li>
-                <li>
-                  Start backend:{" "}
-                  <code>cd api && poetry run uvicorn app.main:app --reload</code>
-                </li>
-                <li>
-                  Start frontend: <code>cd client && npm run dev</code>
-                </li>
-                <li>
-                  Visit <code>http://localhost:3000</code>
-                </li>
-              </ol>
-            </div>
-          </div>
-        </div>
-      </main>
-    </>
+      </div>
+    </section>
   );
 }

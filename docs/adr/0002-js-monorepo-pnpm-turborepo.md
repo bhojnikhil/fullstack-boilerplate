@@ -18,7 +18,9 @@ The frontend was a standalone npm project (`client/`). The v2 plan adds a mobile
   `dependsOn: ["^task"]` so shared packages are handled before their consumers. Remote
   caching is not configured.
 - **`packages/config`** (`@repo/config`) holds the shared TypeScript base configs,
-  ESLint flat config and Prettier config.
+  ESLint flat config and Prettier config. The Next.js config uses native flat
+  exports as of Next.js 16. See [ADR 0005](0005-web-foundation.md) for compatible
+  ESLint and TypeScript versions.
 - The Python API stays outside the JS workspace. The root `Makefile` is the single entry
   point that drives both uv and pnpm/Turborepo.
 - Workspace package names are fixed (`web`, `@repo/config`), not template placeholders.

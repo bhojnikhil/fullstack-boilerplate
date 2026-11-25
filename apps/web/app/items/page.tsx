@@ -3,51 +3,62 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
-import { api } from "@/lib/api";
-
-interface Item {
-  id: string;
-  title: string;
-  description: string;
-  created_at: string;
-}
+import { api, type Item } from "@/lib/api";
+import { FormError, TextField } from "@/components/form";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 
 export default function ItemsPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, restoreSession } = useAuthStore();
   const [items, setItems] = useState<Item[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
+  const [failureCount, setFailureCount] = useState(0);
 
-  useEffect(() => {
-    if (!user) {
-      router.push("/auth/login");
-      return;
-    }
-
-    loadItems();
-  }, [user, router]);
-
-  const loadItems = async () => {
+  const loadItems = async (cursor?: string) => {
+    const setLoading = cursor ? setIsLoadingMore : setIsLoading;
     try {
-      setIsLoading(true);
-      const response = await api.getItems();
-      setItems(response.data);
+      setLoading(true);
+      const { data } = await api.getItems(cursor);
+      setItems((previous) => (cursor ? [...previous, ...data.items] : data.items));
+      setNextCursor(data.next_cursor);
       setError("");
     } catch (err) {
       setError("Failed to load items");
       console.error(err);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!user) {
+      // The access token is kept in memory only; after a reload, try the refresh cookie.
+      void restoreSession()
+        .then((restored) => {
+          if (!restored) router.push("/auth/login");
+        })
+        .catch(() => {
+          setError("Could not restore your session. Reload to try again.");
+        });
+      return;
+    }
+
+    // The existing loader sets its loading state before each request.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadItems();
+  }, [user, router, restoreSession]);
 
   const handleCreateItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       setError("Title is required");
+      setFailureCount((count) => count + 1);
       return;
     }
 
@@ -59,6 +70,7 @@ export default function ItemsPage() {
       await loadItems();
     } catch (err) {
       setError("Failed to create item");
+      setFailureCount((count) => count + 1);
       console.error(err);
     }
   };
@@ -74,124 +86,102 @@ export default function ItemsPage() {
   };
 
   if (!user) {
-    return null;
+    return error ? <p role="alert">{error}</p> : null;
   }
 
   return (
     <>
-      <header className="header">
-        <div className="container">
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-3xl font-semibold tracking-tight">Items</h1>
+        <div className="flex flex-wrap items-center gap-4">
+          <span>Welcome, {user.name}</span>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              try {
+                await useAuthStore.getState().logout();
+                router.push("/");
+              } catch {
+                setError("Could not sign out. Please try again.");
+                setFailureCount((count) => count + 1);
+              }
             }}
           >
-            <h1>Items</h1>
-            <div>
-              <span style={{ marginRight: "1rem" }}>Welcome, {user.name}</span>
-              <button
-                className="button button-secondary"
-                onClick={() => {
-                  useAuthStore.getState().logout();
-                  router.push("/");
-                }}
-              >
-                Logout
-              </button>
-            </div>
-          </div>
+            Logout
+          </Button>
         </div>
-      </header>
+      </div>
 
-      <main className="main">
-        <div className="container">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "2rem" }}>
-            <div className="card">
-              <h2>Create Item</h2>
-              <form onSubmit={handleCreateItem} style={{ marginTop: "1rem" }}>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label htmlFor="title">Title</label>
-                  <input
-                    id="title"
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    style={{ width: "100%", marginTop: "0.5rem" }}
-                  />
-                </div>
-
-                <div style={{ marginBottom: "1rem" }}>
-                  <label htmlFor="description">Description</label>
-                  <textarea
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    style={{
-                      width: "100%",
-                      marginTop: "0.5rem",
-                      minHeight: "100px",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "0.375rem",
-                      padding: "0.5rem",
-                    }}
-                  />
-                </div>
-
-                <button type="submit" className="button" style={{ width: "100%" }}>
-                  Create
-                </button>
-              </form>
+      <div className="grid items-start gap-6 md:grid-cols-[1fr_2fr]">
+        <div className="rounded-xl border bg-card p-5">
+          <h2 className="text-xl font-semibold">Create Item</h2>
+          <form onSubmit={handleCreateItem} className="mt-4 grid gap-4">
+            <TextField
+              label="Title"
+              id="title"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <div className="grid gap-2">
+              <Label htmlFor="description">Description</Label>
+              <textarea
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring md:text-sm dark:bg-input/30"
+              />
             </div>
+            <Button type="submit" disabled={isLoadingMore}>
+              Create
+            </Button>
+          </form>
+        </div>
 
-            <div>
-              {error && (
-                <div
-                  className="card"
-                  style={{ marginBottom: "1rem", background: "#fee2e2" }}
-                >
-                  <span className="error">{error}</span>
-                </div>
-              )}
-
-              {isLoading ? (
-                <div className="card">Loading items...</div>
-              ) : items.length === 0 ? (
-                <div className="card">No items yet. Create one to get started!</div>
-              ) : (
-                <div style={{ display: "grid", gap: "1rem" }}>
-                  {items.map((item) => (
-                    <div key={item.id} className="card">
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "start",
-                        }}
-                      >
-                        <div>
-                          <h3>{item.title}</h3>
-                          <p>{item.description}</p>
-                          <small style={{ color: "#6b7280" }}>
-                            {new Date(item.created_at).toLocaleDateString()}
-                          </small>
-                        </div>
-                        <button
-                          className="button button-secondary"
-                          onClick={() => handleDeleteItem(item.id)}
-                        >
-                          Delete
-                        </button>
-                      </div>
+        <div className="grid gap-4">
+          <FormError message={error} failureCount={failureCount} />
+          {isLoading ? (
+            <div className="rounded-xl border bg-card p-5">Loading items...</div>
+          ) : items.length === 0 ? (
+            <div className="rounded-xl border bg-card p-5">
+              No items yet. Create one to get started!
+            </div>
+          ) : (
+            <>
+              {items.map((item) => (
+                <div key={item.id} className="rounded-xl border bg-card p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 wrap-break-word">
+                      <h3 className="font-semibold">{item.title}</h3>
+                      <p>{item.description}</p>
+                      <small className="text-muted-foreground">
+                        {new Date(item.created_at).toLocaleDateString()}
+                      </small>
                     </div>
-                  ))}
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleDeleteItem(item.id)}
+                      disabled={isLoadingMore}
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </div>
+              ))}
+              {nextCursor && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={isLoadingMore}
+                  onClick={() => loadItems(nextCursor)}
+                >
+                  {isLoadingMore ? "Loading…" : "Load more"}
+                </Button>
               )}
-            </div>
-          </div>
+            </>
+          )}
         </div>
-      </main>
+      </div>
     </>
   );
 }

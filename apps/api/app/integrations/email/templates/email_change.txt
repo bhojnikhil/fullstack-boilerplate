@@ -1,0 +1,8 @@
+Hi $name,
+
+Confirm that you want to use this address for your $app_name account by opening this link:
+
+$link
+
+The link expires in $expires. Your account keeps its current email address until you confirm.
+If you did not ask for this change, you can ignore this email.
