@@ -41,6 +41,8 @@ class AuditEventType(StrEnum):
     GOOGLE_LINKED = "google_linked"
     GOOGLE_UNLINKED = "google_unlinked"
     ACCOUNT_DELETED = "account_deleted"
+    # The inbox owner proved control of an unverified account; unproven credentials removed.
+    ACCOUNT_CLAIMED = "account_claimed"
 
 
 class AuditEvent(Base, UUIDMixin):

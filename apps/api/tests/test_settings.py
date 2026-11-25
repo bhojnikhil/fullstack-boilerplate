@@ -26,6 +26,7 @@ DEPLOYED = {
     "jwt_secret_key": "jwt-staging-fixture-" * 3,
     "database_url": "postgresql://app:app@pooler.example/db",
     "email_backend": "smtp",
+    "smtp_security": "starttls",
     "web_url": "https://web.example",
 }
 
@@ -302,3 +303,50 @@ def test_cors_origins_drop_default_ports(configured, expected):
     assert Settings(_env_file=None, **TEST_SETTINGS, cors_origins=[configured]).cors_origins == [
         expected
     ]
+
+
+def test_smtp_credentials_are_never_sent_without_tls():
+    credentials = {"smtp_username": "mailer", "smtp_password": "s3cret"}
+    with pytest.raises(ValidationError, match="SMTP credentials require"):
+        Settings(_env_file=None, **TEST_SETTINGS, **credentials)
+    for security in ("starttls", "tls"):
+        Settings(_env_file=None, **TEST_SETTINGS, **credentials, smtp_security=security)
+    with pytest.raises(ValidationError, match="SMTP credentials require"):
+        Settings(
+            _env_file=None,
+            **{**DEPLOYED, "env": "production", "smtp_security": "none"},
+            **credentials,
+            smtp_allow_insecure=True,
+        )
+
+
+@pytest.mark.parametrize("env", ["staging", "production"])
+def test_deployed_smtp_requires_tls_unless_a_local_relay_is_allowed(env):
+    fields = {**DEPLOYED, "env": env, "smtp_security": "none"}
+    with pytest.raises(ValidationError, match="SMTP_SECURITY must be starttls or tls"):
+        Settings(_env_file=None, **fields)
+    assert Settings(_env_file=None, **fields, smtp_allow_insecure=True).smtp_allow_insecure
+
+
+def test_missing_test_secret_is_explained(database_url):
+    env = {name: value for name, value in os.environ.items() if name != "SECRET_KEY"}
+    env.update(ENV="test", DATABASE_URL=database_url.render_as_string(hide_password=False))
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--no-cov",
+            "tests/test_routers/test_health.py",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode != 0
+    assert "Set SECRET_KEY to a random test secret" in process.stdout

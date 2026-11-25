@@ -103,6 +103,9 @@ class Settings(DatabaseSettings):
     smtp_username: str = ""
     smtp_password: SecretStr = SecretStr("")
     smtp_security: Literal["none", "starttls", "tls"] = "none"
+    # Staging and production require TLS; set this only for a relay on the same host or
+    # private network (a sidecar). Credentials are never sent without TLS.
+    smtp_allow_insecure: bool = False
     smtp_timeout_seconds: float = Field(default=10, gt=0, le=60)
 
     rate_limit_backend: Literal["postgres", "memory"] = "postgres"
@@ -203,6 +206,14 @@ class Settings(DatabaseSettings):
             )
         if bool(self.smtp_username) != bool(self.smtp_password.get_secret_value()):
             raise ValueError("SMTP_USERNAME and SMTP_PASSWORD must be set together")
+        if self.smtp_security == "none":
+            if self.smtp_username:
+                raise ValueError("SMTP credentials require SMTP_SECURITY=starttls or tls")
+            if not self.local and self.email_backend == "smtp" and not self.smtp_allow_insecure:
+                raise ValueError(
+                    "SMTP_SECURITY must be starttls or tls in staging and production "
+                    "(SMTP_ALLOW_INSECURE=true allows a local relay)"
+                )
         return self
 
     def validate_jwt_secret(self) -> None:

@@ -21,7 +21,7 @@ from app.core.db import RequestSession
 from app.core.logging import configure_logging
 from app.core.middleware import TrustedHostEnvelopeMiddleware
 from app.core.security import create_access_token
-from app.main import create_app
+from app.factory import create_app
 from app.modules.auth.models import User
 from app.modules.items.models import Item
 from app.modules.items.repository import ItemRepository
@@ -48,7 +48,13 @@ def assert_error(response, status, code):
         ("PUT", "/v1/items", {}, 405, "method_not_allowed"),
         ("POST", "/v1/auth/register", {"password": "private-value"}, 422, "validation_error"),
         ("GET", "/v1/me", None, 401, "unauthorized"),
-        ("POST", "/v1/auth/verify-email", {"token": "x" * 43}, 400, "invalid_or_expired_token"),
+        (
+            "POST",
+            "/v1/auth/verify-email",
+            {"token": "x" * 43, "password": "private-value"},
+            400,
+            "invalid_or_expired_token",
+        ),
     ],
 )
 async def test_framework_and_domain_envelopes(client, method, url, body, status, code):

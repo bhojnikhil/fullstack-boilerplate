@@ -33,13 +33,14 @@ token reuse) use a `DomainError` that commits. `user_id` has no foreign key, so 
 outlive a deleted account as pseudonymous records. Details hold no tokens, passwords,
 email addresses or IPs; digests stand in where correlation helps.
 
-**Enumeration resistance.** Registration answers `202` with the same body for every
-address. A new address gets a verification link, an existing unverified one gets a new
-link, and a verified one gets a notice with sign-in and reset links; the password is
-always hashed first so timing matches. Reset requests behave the same way, and sign-in
-failures share one error and do the same hashing work. Accounts are created unverified
-and may sign in before verifying, which keeps onboarding simple. The trade-off: someone
-who registers an address and signs in with the password they chose learns that the
-address had no account. Hiding that would require creating accounts only when the
-emailed link is opened. We chose the simpler flow because each probe creates an account,
-is rate limited and emails the address owner.
+**Enumeration resistance and account claims.** Registration, resend and reset answer
+before account-dependent work in a background task. Registration always hashes the
+submitted password. Unverified accounts cannot sign in, link credentials or change their
+email. Registration stores the pending password hash with a verification token; a later
+registration replaces it. Verification requires both the link and the chosen password,
+so opening a link from an attacker’s registration cannot activate their credential.
+Claiming an unverified account also removes existing sessions, provider links and tokens.
+Password reset proves inbox ownership and performs the same cleanup. Legacy bcrypt and
+unknown-account verification can still have different timing; rate limits reduce probing
+but do not eliminate that difference. Background work is not durable and can be lost on
+process failure.

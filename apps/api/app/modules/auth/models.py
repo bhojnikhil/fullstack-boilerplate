@@ -19,7 +19,19 @@ from app.core.models import Base, TimestampMixin, UUIDMixin
 
 class OAuthProvider(StrEnum):
     GOOGLE = "google"
-    # Sign in with Apple would be added here; see docs/adr/0006-google-id-token-sign-in.md.
+    # Sign in with Apple would be added here; see docs/adr/0007-google-id-token-sign-in.md.
+
+
+class OAuthLinkState(StrEnum):
+    # Usable for sign-in: created after Google proved the inbox (authoritative email),
+    # by the signed-in owner of a verified account, or by the identity that created the
+    # account in an earlier release.
+    LINKED = "linked"
+    # Linked to a password account by an earlier release's email matching, so the two
+    # credentials may belong to different people. Not usable until re-proven.
+    UNCONFIRMED = "unconfirmed"
+    # Unlinked by the user. Kept so the identity is never relinked automatically.
+    UNLINKED = "unlinked"
 
 
 class SignInMethod(StrEnum):
@@ -34,6 +46,8 @@ class SessionRevocation(StrEnum):
     REFRESH_TOKEN_REUSED = "refresh_token_reused"
     PASSWORD_CHANGED = "password_changed"
     PASSWORD_RESET = "password_reset"
+    ACCOUNT_CLAIMED = "account_claimed"
+    GOOGLE_UNLINKED = "google_unlinked"
 
 
 class AccountTokenPurpose(StrEnum):
@@ -83,6 +97,9 @@ class OAuthAccount(Base, UUIDMixin, TimestampMixin):
     )
     provider: Mapped[OAuthProvider] = mapped_column(String(50), nullable=False)
     provider_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[OAuthLinkState] = mapped_column(
+        String(16), nullable=False, default=OAuthLinkState.LINKED
+    )
 
 
 class AuthSession(Base, UUIDMixin, TimestampMixin):
@@ -134,5 +151,8 @@ class AccountToken(Base, UUIDMixin):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     # The address the token was sent to; it must still match when the token is used.
     email: Mapped[str] = mapped_column(String(255))
+    # Email verification only: the password chosen at registration. It becomes the
+    # account's password when someone who knows it opens the emailed link.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

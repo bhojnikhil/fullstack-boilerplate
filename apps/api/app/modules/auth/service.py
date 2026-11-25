@@ -1,8 +1,19 @@
 """Email/password accounts: registration, sign-in, verification, reset and sessions.
 
-Responses never reveal whether an email is registered: registration and reset
-requests answer the same way for every address, sign-in failures share one error,
-and accounts without a password are checked against a dummy hash.
+Account ownership rules (see docs/adr/0008-rate-limits-email-audit.md):
+
+- Registration never gives an account a usable password. The chosen password waits
+  in the emailed verification token; opening the link and entering that password
+  activates it. A link from someone else's registration is useless without their
+  password, and registering again replaces the pending password.
+- Only accounts with a verified email can sign in with a password.
+- When someone proves control of an unverified account's inbox (verification or
+  password reset), they take it over: other sessions, linked identities and emailed
+  tokens are removed ("claim").
+
+Responses never reveal whether an email is registered: registration, verification
+resends and reset requests answer before looking anything up (the account work runs
+after the response), and sign-in failures share one error and the same hashing work.
 """
 
 import uuid
@@ -23,25 +34,38 @@ from app.core.security import (
     token_digest,
     verify_password,
 )
-from app.integrations.email import Mailer
+from app.integrations.email import MailSender
 from app.integrations.email.templates import Template
 from app.integrations.pwned_passwords import BreachedPasswordChecker
 from app.modules.auth import limits
+from app.modules.auth.deferred import Deferred
 from app.modules.auth.dependencies import AuthContext
 from app.modules.auth.models import (
     AccountToken,
     AccountTokenPurpose,
     AuthSession,
+    OAuthLinkState,
     SessionRevocation,
     SignInMethod,
     User,
 )
-from app.modules.auth.repository import AccountTokenRepository, SessionRepository, UserRepository
-from app.modules.auth.schemas import LoginRequest, RegisterRequest, ResetPasswordRequest
+from app.modules.auth.repository import (
+    AccountTokenRepository,
+    OAuthAccountRepository,
+    SessionRepository,
+    UserRepository,
+    lock_email,
+)
+from app.modules.auth.schemas import (
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    VerifyEmailRequest,
+)
 from app.modules.auth.sessions import IssuedTokens, SessionService
 
-# Web pages that receive emailed tokens (built in phase 8). Tokens go in the URL
-# fragment, which browsers do not send to servers or in Referer headers.
+# Web pages that receive emailed tokens. Tokens go in the URL fragment, which
+# browsers do not send to servers or in Referer headers.
 VERIFY_EMAIL_PATH = "/auth/verify-email"
 RESET_PASSWORD_PATH = "/auth/reset-password"
 CONFIRM_EMAIL_PATH = "/auth/confirm-email"
@@ -62,40 +86,131 @@ def describe(duration: timedelta) -> str:
     return "1 hour" if hours == 1 else f"{hours} hours"
 
 
-class AccountEmails:
-    """Issues single-use emailed tokens. Only their SHA-256 is stored."""
+async def issue_token(
+    db: AsyncSession,
+    user: User,
+    purpose: AccountTokenPurpose,
+    email: str,
+    lifetime: timedelta,
+    *,
+    password_hash: str | None = None,
+) -> str:
+    """Create a single-use emailed token. Only its SHA-256 is stored."""
+    token = new_token()
+    await AccountTokenRepository(db).add(
+        user.id,
+        purpose,
+        token_digest(token),
+        email,
+        datetime.now(UTC) + lifetime,
+        password_hash=password_hash,
+    )
+    return token
 
-    def __init__(self, db: AsyncSession, config: Settings, mailer: Mailer) -> None:
-        self.config = config
-        self.mailer = mailer
-        self.tokens = AccountTokenRepository(db)
 
-    async def issue(
-        self, user: User, purpose: AccountTokenPurpose, email: str, lifetime: timedelta
-    ) -> str:
-        token = new_token()
-        expires_at = datetime.now(UTC) + lifetime
-        await self.tokens.add(user.id, purpose, token_digest(token), email, expires_at)
-        return token
+async def send_verification(
+    db: AsyncSession, mail: MailSender, config: Settings, user: User, password_hash: str
+) -> None:
+    """Email a link that activates ``password_hash``. Earlier links stop working."""
+    await AccountTokenRepository(db).delete_for_user(user.id, AccountTokenPurpose.VERIFY_EMAIL)
+    lifetime = timedelta(hours=config.email_token_expire_hours)
+    token = await issue_token(
+        db,
+        user,
+        AccountTokenPurpose.VERIFY_EMAIL,
+        user.email,
+        lifetime,
+        password_hash=password_hash,
+    )
+    mail.send(
+        Template.VERIFY_EMAIL,
+        user.email,
+        name=user.name,
+        link=web_link(config, VERIFY_EMAIL_PATH, token),
+        expires=describe(lifetime),
+    )
 
-    async def send_verification(self, user: User) -> None:
-        lifetime = timedelta(hours=self.config.email_token_expire_hours)
-        token = await self.issue(user, AccountTokenPurpose.VERIFY_EMAIL, user.email, lifetime)
-        self.mailer.send(
-            Template.VERIFY_EMAIL,
+
+async def register_account(
+    db: AsyncSession,
+    mail: MailSender,
+    config: Settings,
+    client: ClientInfo,
+    email: str,
+    name: str,
+    password_hash: str,
+) -> None:
+    """Deferred part of registration (runs after the response)."""
+    users = UserRepository(db)
+    await lock_email(db, email)
+    user = await users.get_by_email(email)
+    if user is None:
+        user = await users.create(email, name)
+        if user is None:  # pragma: no cover - the email lock prevents this
+            return
+        record_event(
+            db, AuditEventType.ACCOUNT_REGISTERED, client=client, user_id=user.id, method="password"
+        )
+        await send_verification(db, mail, config, user, password_hash)
+        return
+    user = await users.lock(user.id)
+    if user is None or not user.is_active:
+        return
+    if user.email_verified_at is None:
+        # Nobody has proven this inbox yet: the newest registration's password wins.
+        user.name = name
+        await send_verification(db, mail, config, user, password_hash)
+    else:
+        mail.send(
+            Template.ACCOUNT_EXISTS,
             user.email,
             name=user.name,
-            link=web_link(self.config, VERIFY_EMAIL_PATH, token),
-            expires=describe(lifetime),
+            sign_in_link=web_link(config, SIGN_IN_PATH),
+            reset_link=web_link(config, FORGOT_PASSWORD_PATH),
         )
 
-    async def consume(self, purpose: AccountTokenPurpose, token: str) -> AccountToken:
-        record = await self.tokens.lock_valid(purpose, token_digest(token))
-        if record is None:
-            raise DomainError(ErrorCode.INVALID_OR_EXPIRED_TOKEN)
-        # Single use: consuming one token retires every token of that kind for the user.
-        await self.tokens.delete_for_user(record.user_id, purpose)
-        return record
+
+async def resend_verification(
+    db: AsyncSession, mail: MailSender, config: Settings, email: str
+) -> None:
+    """Deferred: a new link for the pending password (or, for accounts from before
+    email verification existed, the current one). Either way only someone who knows
+    that password can use it."""
+    users, tokens = UserRepository(db), AccountTokenRepository(db)
+    user = await users.get_by_email(email)
+    if user is None:
+        return
+    user = await users.lock(user.id)
+    if user is None or not user.is_active or user.email_verified_at is not None:
+        return
+    latest = await tokens.latest(user.id, AccountTokenPurpose.VERIFY_EMAIL)
+    password_hash = latest.password_hash if latest is not None else None
+    password_hash = password_hash or user.hashed_password
+    if password_hash is not None:
+        await send_verification(db, mail, config, user, password_hash)
+
+
+async def send_password_reset(
+    db: AsyncSession, mail: MailSender, config: Settings, client: ClientInfo, email: str
+) -> None:
+    """Deferred part of a password reset request."""
+    users = UserRepository(db)
+    user = await users.get_by_email(email)
+    if user is None:
+        return
+    user = await users.lock(user.id)
+    if user is None or not user.is_active:
+        return
+    lifetime = timedelta(minutes=config.password_reset_expire_minutes)
+    token = await issue_token(db, user, AccountTokenPurpose.RESET_PASSWORD, user.email, lifetime)
+    mail.send(
+        Template.RESET_PASSWORD,
+        user.email,
+        name=user.name,
+        link=web_link(config, RESET_PASSWORD_PATH, token),
+        expires=describe(lifetime),
+    )
+    record_event(db, AuditEventType.PASSWORD_RESET_REQUESTED, client=client, user_id=user.id)
 
 
 class PasswordPolicy:
@@ -113,10 +228,11 @@ class AuthService:
         self,
         db: AsyncSession,
         config: Settings,
-        mailer: Mailer,
+        mailer: MailSender,
         limiter: RateLimiter,
         client: ClientInfo,
         policy: PasswordPolicy,
+        deferred: Deferred,
     ) -> None:
         self.db = db
         self.config = config
@@ -124,10 +240,12 @@ class AuthService:
         self.limiter = limiter
         self.client = client
         self.policy = policy
+        self.deferred = deferred
         self.users = UserRepository(db)
+        self.tokens = AccountTokenRepository(db)
+        self.identities = OAuthAccountRepository(db)
         self.sessions = SessionService(db, config)
         self.session_rows = SessionRepository(db)
-        self.emails = AccountEmails(db, config, mailer)
 
     def audit(self, event: AuditEventType, **fields: str | int | bool | None) -> None:
         user_id = fields.pop("user_id", None)
@@ -141,47 +259,107 @@ class AuthService:
             **fields,
         )
 
+    async def claim(self, user: User, *, password_hash: str | None) -> int:
+        """The inbox owner takes over an unverified account (call with the user locked).
+
+        Anything set up before the inbox was proven may belong to someone else, so
+        sessions, linked identities and emailed tokens go, and ``password_hash``
+        (the owner's password, or None) replaces any earlier password.
+        """
+        user.hashed_password = password_hash
+        user.email_verified_at = datetime.now(UTC)
+        revoked = await self.session_rows.revoke_all(user.id, SessionRevocation.ACCOUNT_CLAIMED)
+        identities = await self.identities.delete_for_user(user.id)
+        await self.tokens.delete_for_user(user.id)
+        self.audit(
+            AuditEventType.ACCOUNT_CLAIMED,
+            user_id=str(user.id),
+            sessions_revoked=len(revoked),
+            identities_removed=identities,
+        )
+        return len(revoked)
+
+    async def lock_token(
+        self, purpose: AccountTokenPurpose, token: str
+    ) -> tuple[User, AccountToken]:
+        """Find a valid token, then lock its user and the token in that order.
+
+        Verification and reset links must still match the account's address; email
+        change links carry the new address instead (all tokens go when it changes).
+        """
+        digest = token_digest(token)
+        found = await self.tokens.find_valid(purpose, digest)
+        user = await self.users.lock(found.user_id) if found is not None else None
+        record = await self.tokens.lock_valid(purpose, digest) if user is not None else None
+        # A link sent to a previous address must not act on the current one.
+        sent_elsewhere = (
+            record is not None
+            and purpose != AccountTokenPurpose.CHANGE_EMAIL
+            and user is not None
+            and user.email.lower() != record.email.lower()
+        )
+        if user is None or record is None or not user.is_active or sent_elsewhere:
+            raise DomainError(ErrorCode.INVALID_OR_EXPIRED_TOKEN)
+        return user, record
+
     async def register(self, data: RegisterRequest) -> None:
         await self.limiter.hit(limits.REGISTER_PER_IP, self.client.ip)
         await self.limiter.hit(limits.REGISTER_PER_ACCOUNT, data.email)
         await self.policy.check(data.password)
-        # Hash before looking anything up so timing is the same for every address.
-        hashed = await hash_password(data.password)
-        user = await self.users.create(data.email, data.name, hashed_password=hashed)
-        if user is not None:
-            self.audit(AuditEventType.ACCOUNT_REGISTERED, user_id=str(user.id), method="password")
-            await self.emails.send_verification(user)
-            return
+        password_hash = await hash_password(data.password)
+        config, client = self.config, self.client
 
-        existing = await self.users.get_by_email(data.email)
-        if existing is None or not existing.is_active:
-            return
-        if existing.email_verified_at is None:
-            # Never touch the existing password; only the inbox owner can verify it.
-            await self.emails.send_verification(existing)
-        else:
-            self.mailer.send(
-                Template.ACCOUNT_EXISTS,
-                existing.email,
-                name=existing.name,
-                sign_in_link=web_link(self.config, SIGN_IN_PATH),
-                reset_link=web_link(self.config, FORGOT_PASSWORD_PATH),
-            )
+        async def work(db: AsyncSession, mail: MailSender) -> None:
+            await register_account(db, mail, config, client, data.email, data.name, password_hash)
+
+        self.deferred.run("register", work)
+
+    async def resend_verification(self, email: str) -> None:
+        await self.limiter.hit(limits.VERIFICATION_PER_IP, self.client.ip)
+        await self.limiter.hit(limits.VERIFICATION_PER_ACCOUNT, email)
+        config = self.config
+
+        async def work(db: AsyncSession, mail: MailSender) -> None:
+            await resend_verification(db, mail, config, email)
+
+        self.deferred.run("resend_verification", work)
+
+    async def verify_email(self, data: VerifyEmailRequest) -> None:
+        user, record = await self.lock_token(AccountTokenPurpose.VERIFY_EMAIL, data.token)
+        if user.email_verified_at is not None or record.password_hash is None:
+            raise DomainError(ErrorCode.INVALID_OR_EXPIRED_TOKEN)
+        identifier = user.email.lower()
+        await self.limiter.ensure_not_locked(limits.LOGIN_FAILURES, identifier)
+        valid, replacement = await verify_password(data.password, record.password_hash)
+        if not valid:
+            await self.limiter.record_failure(limits.LOGIN_FAILURES, identifier)
+            self.audit(AuditEventType.LOGIN_FAILED, user_id=str(user.id), reason="verification")
+            raise DomainError(ErrorCode.INVALID_CREDENTIALS, "Incorrect password", commit=True)
+        await self.limiter.clear_failures(limits.LOGIN_FAILURES, identifier)
+        await self.claim(user, password_hash=replacement or record.password_hash)
+        self.audit(AuditEventType.EMAIL_VERIFIED, user_id=str(user.id))
 
     async def login(self, data: LoginRequest) -> tuple[IssuedTokens, User]:
         await self.limiter.hit(limits.LOGIN_PER_IP, self.client.ip)
         await self.limiter.hit(limits.LOGIN_PER_ACCOUNT, data.email)
         await self.limiter.ensure_not_locked(limits.LOGIN_FAILURES, data.email)
 
-        user = await self.users.get_by_email(data.email)
-        valid, replacement = await verify_password(
-            data.password, user.hashed_password if user is not None else None
-        )
-        if user is None or not valid:
+        found = await self.users.get_by_email(data.email)
+        # Only a verified account has a usable password (see the module docstring).
+        checked = found.hashed_password if found and found.email_verified_at else None
+        valid, replacement = await verify_password(data.password, checked)
+        user = None
+        if found is not None and valid:
+            # Serialize with resets and password changes, then make sure the password we
+            # checked is still the account's: a reset may have committed meanwhile.
+            locked = await self.users.lock(found.id)
+            if locked and locked.email_verified_at and locked.hashed_password == checked:
+                user = locked
+        if user is None:
             await self.limiter.record_failure(limits.LOGIN_FAILURES, data.email)
             self.audit(
                 AuditEventType.LOGIN_FAILED,
-                user_id=str(user.id) if user is not None else None,
+                user_id=str(found.id) if found is not None else None,
                 method="password",
                 email_hash=keyed_digest(self.config, "email", data.email),
             )
@@ -212,54 +390,40 @@ class AuthService:
             AuditEventType.LOGOUT, user_id=str(context.user.id), session_id=str(context.session.id)
         )
 
-    async def verify_email(self, token: str) -> None:
-        record = await self.emails.consume(AccountTokenPurpose.VERIFY_EMAIL, token)
-        user = await self.users.get_by_id(record.user_id)
-        # A link sent to a previous address must not verify the current one.
-        if user is None or user.email.lower() != record.email.lower():
-            raise DomainError(ErrorCode.INVALID_OR_EXPIRED_TOKEN)
-        if user.email_verified_at is None:
-            user.email_verified_at = datetime.now(UTC)
-            self.audit(AuditEventType.EMAIL_VERIFIED, user_id=str(user.id))
-
-    async def resend_verification(self, user: User) -> None:
-        await self.limiter.hit(limits.VERIFICATION_PER_IP, self.client.ip)
-        await self.limiter.hit(limits.VERIFICATION_PER_ACCOUNT, str(user.id))
-        if user.email_verified_at is None:
-            await self.emails.send_verification(user)
-
     async def request_password_reset(self, email: str) -> None:
         await self.limiter.hit(limits.PASSWORD_RESET_PER_IP, self.client.ip)
         await self.limiter.hit(limits.PASSWORD_RESET_PER_ACCOUNT, email)
-        user = await self.users.get_by_email(email)
-        if user is None or not user.is_active:
-            return
-        lifetime = timedelta(minutes=self.config.password_reset_expire_minutes)
-        token = await self.emails.issue(
-            user, AccountTokenPurpose.RESET_PASSWORD, user.email, lifetime
-        )
-        self.mailer.send(
-            Template.RESET_PASSWORD,
-            user.email,
-            name=user.name,
-            link=web_link(self.config, RESET_PASSWORD_PATH, token),
-            expires=describe(lifetime),
-        )
-        self.audit(AuditEventType.PASSWORD_RESET_REQUESTED, user_id=str(user.id))
+        config, client = self.config, self.client
+
+        async def work(db: AsyncSession, mail: MailSender) -> None:
+            await send_password_reset(db, mail, config, client, email)
+
+        self.deferred.run("password_reset", work)
 
     async def reset_password(self, data: ResetPasswordRequest) -> None:
-        record = await self.emails.consume(AccountTokenPurpose.RESET_PASSWORD, data.token)
-        user = await self.users.get_by_id(record.user_id)
-        if user is None or not user.is_active or user.email.lower() != record.email.lower():
-            raise DomainError(ErrorCode.INVALID_OR_EXPIRED_TOKEN)
+        user, _ = await self.lock_token(AccountTokenPurpose.RESET_PASSWORD, data.token)
         await self.policy.check(data.new_password)
-
-        user.hashed_password = await hash_password(data.new_password)
-        # Using the emailed link proves control of the address.
-        user.email_verified_at = user.email_verified_at or datetime.now(UTC)
-        revoked = await self.session_rows.revoke_all(user.id, SessionRevocation.PASSWORD_RESET)
+        password_hash = await hash_password(data.new_password)
+        if user.email_verified_at is None:
+            # The emailed link proves control of the inbox.
+            sessions_revoked = await self.claim(user, password_hash=password_hash)
+        else:
+            user.hashed_password = password_hash
+            sessions_revoked = len(
+                await self.session_rows.revoke_all(user.id, SessionRevocation.PASSWORD_RESET)
+            )
+            # Pending email changes may have been started by whoever had a session.
+            await self.tokens.delete_for_user(
+                user.id,
+                AccountTokenPurpose.RESET_PASSWORD,
+                AccountTokenPurpose.CHANGE_EMAIL,
+                AccountTokenPurpose.VERIFY_EMAIL,
+            )
+            await self.identities.delete_for_user(user.id, state=OAuthLinkState.UNCONFIRMED)
         await self.limiter.clear_failures(limits.LOGIN_FAILURES, user.email.lower())
-        self.audit(AuditEventType.PASSWORD_RESET, user_id=str(user.id), sessions_revoked=revoked)
+        self.audit(
+            AuditEventType.PASSWORD_RESET, user_id=str(user.id), sessions_revoked=sessions_revoked
+        )
         self.mailer.send(
             Template.PASSWORD_CHANGED,
             user.email,
@@ -268,7 +432,9 @@ class AuthService:
         )
 
     async def reauthenticate_with_password(self, context: AuthContext, password: str) -> None:
-        user = context.user
+        user = await self.users.lock(context.user.id)
+        if user is None:  # pragma: no cover - the session's user row exists
+            raise DomainError(ErrorCode.INVALID_TOKEN)
         await check_current_password(self, user, password, purpose="reauthenticate")
         context.session.authenticated_at = datetime.now(UTC)
         self.audit(
@@ -307,8 +473,10 @@ class AuthService:
         return target is context.session
 
     async def revoke_other_sessions(self, context: AuthContext) -> int:
-        revoked = await self.session_rows.revoke_all(
-            context.user.id, SessionRevocation.REVOKED_OTHERS, keep=context.session.id
+        revoked = len(
+            await self.session_rows.revoke_all(
+                context.user.id, SessionRevocation.REVOKED_OTHERS, keep=context.session.id
+            )
         )
         self.audit(
             AuditEventType.OTHER_SESSIONS_REVOKED,
@@ -322,8 +490,12 @@ class AuthService:
 async def check_current_password(
     service: AuthService, user: User, password: str, *, purpose: str
 ) -> None:
-    """Verify a signed-in user's password with per-user backoff on failures."""
+    """Verify a signed-in user's password with per-user backoff on failures.
+
+    Call with the user row locked so a concurrent reset cannot interleave.
+    """
     identifier = str(user.id)
+    await service.limiter.hit(limits.REAUTH_PER_IP, service.client.ip)
     await service.limiter.hit(limits.REAUTH_PER_ACCOUNT, identifier)
     await service.limiter.ensure_not_locked(limits.PASSWORD_CHECK_FAILURES, identifier)
     valid, replacement = await verify_password(password, user.hashed_password)

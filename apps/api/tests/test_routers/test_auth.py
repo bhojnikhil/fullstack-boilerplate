@@ -79,7 +79,8 @@ async def test_register_creates_unverified_account_and_sends_link(
         user = await session.scalar(select(User))
     assert user.email == "new.user@example.com"
     assert user.email_verified_at is None
-    assert user.hashed_password.startswith("$argon2id$v=19$m=19456,t=2,p=1$")
+    # No usable password until the link is opened: it waits in the emailed token.
+    assert user.hashed_password is None
 
     [email] = outbox
     assert email.template == Template.VERIFY_EMAIL
@@ -89,7 +90,14 @@ async def test_register_creates_unverified_account_and_sends_link(
     async with session_factory() as session:
         stored = await session.scalar(select(AccountToken))
     assert stored.token_hash != token_from(email)  # Only the digest is stored.
+    assert stored.password_hash.startswith("$argon2id$v=19$m=19456,t=2,p=1$")
     assert [e.event for e in await audit_events(session_factory)] == ["account_registered"]
+    # Not usable before verification.
+    assert_error(
+        await login(client, email="new.user@example.com", password=NEW_PASSWORD),
+        401,
+        "invalid_credentials",
+    )
 
 
 async def test_register_does_not_reveal_existing_accounts(
@@ -221,7 +229,7 @@ async def test_web_login_requires_an_allowed_origin(client, session_factory, tes
 async def test_development_cookies_are_not_secure(session_factory, config, test_user, google):
     from httpx import ASGITransport, AsyncClient
 
-    from app.main import create_app
+    from app.factory import create_app
 
     app = create_app(config.model_copy(update={"env": "development"}), session_factory)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as dev:
@@ -571,14 +579,23 @@ async def register_and_verify_token(client, outbox, email="verify@example.com") 
     return token_from(outbox[-1])
 
 
+async def verify(client, token: str, password: str = NEW_PASSWORD):
+    return await client.post("/v1/auth/verify-email", json={"token": token, "password": password})
+
+
 async def test_verify_email(client, outbox, session_factory):
     token = await register_and_verify_token(client, outbox)
-    assert (await client.post("/v1/auth/verify-email", json={"token": token})).status_code == 204
+    # The link alone is not enough: it activates only the password chosen at registration.
+    wrong = await verify(client, token, "not-the-registration-password")
+    assert_error(wrong, 401, "invalid_credentials")
+    assert (await verify(client, token)).status_code == 204
     signed_in = await login(client, email="verify@example.com", password=NEW_PASSWORD)
     assert signed_in.json()["user"]["email_verified"] is True
-    reused = await client.post("/v1/auth/verify-email", json={"token": token})
-    assert_error(reused, 400, "invalid_or_expired_token")
-    assert len(await audit_events(session_factory, "email_verified")) == 1
+    assert_error(await verify(client, token), 400, "invalid_or_expired_token")
+    events = [e.event for e in await audit_events(session_factory)]
+    assert events.count("email_verified") == 1
+    assert "account_claimed" in events
+    assert events.count("login_failed") == 1
 
 
 async def test_expired_verification_token(client, outbox, session_factory):
@@ -587,35 +604,64 @@ async def test_expired_verification_token(client, outbox, session_factory):
         await session.execute(
             update(AccountToken).values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
         )
-    response = await client.post("/v1/auth/verify-email", json={"token": token})
-    assert_error(response, 400, "invalid_or_expired_token")
+    assert_error(await verify(client, token), 400, "invalid_or_expired_token")
 
 
-async def test_resend_verification(client, outbox, session_factory, config):
-    pending = await create_user(session_factory, email="pending@example.com", verified=False)
-    headers = bearer(await sign_in(session_factory, config, pending))
-    for _ in range(3):
-        resent = await client.post("/v1/auth/verify-email/resend", headers=headers)
-        assert resent.status_code == 202
-    assert [e.template for e in outbox] == [Template.VERIFY_EMAIL] * 3
+async def test_registering_again_replaces_the_pending_password(client, outbox, session_factory):
+    first = await register_and_verify_token(client, outbox)
+    payload = {"email": "verify@example.com", "password": NEW_PASSWORD + "-2", "name": "Again"}
+    await client.post("/v1/auth/register", json=payload)
+    second = token_from(outbox[-1])
+    # The first link and its password are gone; only the newest registration counts.
+    assert_error(await verify(client, first), 400, "invalid_or_expired_token")
+    assert_error(await verify(client, second), 401, "invalid_credentials")
+    assert (await verify(client, second, NEW_PASSWORD + "-2")).status_code == 204
     assert_error(
-        await client.post("/v1/auth/verify-email/resend", headers=headers), 429, "rate_limited"
+        await login(client, email="verify@example.com", password=NEW_PASSWORD),
+        401,
+        "invalid_credentials",
     )
-    # Any of the links works; using one retires the others.
+    signed_in = await login(client, email="verify@example.com", password=NEW_PASSWORD + "-2")
+    assert signed_in.json()["user"]["name"] == "Again"
+
+
+async def test_resend_verification(client, outbox, session_factory, test_password_hash):
+    # An account from before verification existed: its own password is the one to confirm.
+    await create_user(
+        session_factory,
+        email="legacy@example.com",
+        hashed_password=test_password_hash,
+        verified=False,
+    )
+    assert_error(await login(client, email="legacy@example.com"), 401, "invalid_credentials")
+    for _ in range(3):
+        resent = await client.post(
+            "/v1/auth/verify-email/resend", json={"email": "Legacy@example.com"}
+        )
+        assert resent.status_code == 202
+    assert [(e.template, e.to) for e in outbox] == [
+        (Template.VERIFY_EMAIL, "legacy@example.com")
+    ] * 3
+    limited = await client.post(
+        "/v1/auth/verify-email/resend", json={"email": "legacy@example.com"}
+    )
+    assert_error(limited, 429, "rate_limited")
+    # Only the newest link works.
     tokens = [token_from(email) for email in outbox]
-    assert (
-        await client.post("/v1/auth/verify-email", json={"token": tokens[0]})
-    ).status_code == 204
-    retired = await client.post("/v1/auth/verify-email", json={"token": tokens[1]})
-    assert_error(retired, 400, "invalid_or_expired_token")
-    assert_error(await client.post("/v1/auth/verify-email/resend"), 401, "unauthorized")
+    assert_error(await verify(client, tokens[0], TEST_PASSWORD), 400, "invalid_or_expired_token")
+    assert (await verify(client, tokens[-1], TEST_PASSWORD)).status_code == 204
+    assert (await login(client, email="legacy@example.com")).status_code == 200
 
 
-async def test_resend_is_a_no_op_when_verified(client, outbox, auth_headers):
-    assert (
-        await client.post("/v1/auth/verify-email/resend", headers=auth_headers)
-    ).status_code == 202
-    assert outbox == []
+async def test_resend_does_not_reveal_accounts(client, outbox, session_factory, test_user):
+    await create_user(session_factory, email="google-only@example.com", verified=False)
+    responses = [
+        await client.post("/v1/auth/verify-email/resend", json={"email": email})
+        for email in ("test@example.com", "nobody@example.com", "google-only@example.com")
+    ]
+    assert {r.status_code for r in responses} == {202}
+    assert len({r.text for r in responses}) == 1
+    assert outbox == []  # Verified, unknown, and no password to confirm.
 
 
 # --------------------------------------------------------------------------- password reset
@@ -759,3 +805,107 @@ async def test_reset_link_stops_working_if_the_account_is_deactivated(
         json={"token": token_from(outbox[0]), "new_password": NEW_PASSWORD},
     )
     assert_error(response, 400, "invalid_or_expired_token")
+
+
+# --------------------------------------------------------------------------- races and timing
+
+
+async def test_sign_in_racing_a_password_reset_keeps_no_session(
+    client, outbox, session_factory, test_user, monkeypatch
+):
+    """A sign-in that checked the old password must not survive a reset (B3)."""
+    from app.modules.auth import service as service_module
+
+    await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
+    reset_token = token_from(outbox[-1])
+    checked, release = asyncio.Event(), asyncio.Event()
+    verify = service_module.verify_password
+
+    async def pause_after_check(password, hashed):
+        result = await verify(password, hashed)
+        if password == TEST_PASSWORD:
+            checked.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(service_module, "verify_password", pause_after_check)
+    async with asyncio.timeout(10):
+        signing_in = asyncio.create_task(login(client))
+        await checked.wait()
+        reset = await client.post(
+            "/v1/auth/password/reset", json={"token": reset_token, "new_password": NEW_PASSWORD}
+        )
+        assert reset.status_code == 204
+        release.set()
+        assert_error(await signing_in, 401, "invalid_credentials")
+    async with session_factory() as session:
+        assert await session.scalar(select(AuthSession)) is None
+        hashed = (await session.get(User, test_user.id)).hashed_password
+    assert (await verify(NEW_PASSWORD, hashed))[0]
+
+
+async def test_concurrent_reset_links_are_serialized(client, outbox, test_user):
+    """Two valid links for one account used at once: one wins, no deadlock (M8)."""
+    for _ in range(2):
+        await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
+    tokens = [token_from(email) for email in outbox]
+    async with asyncio.timeout(10):
+        responses = await asyncio.gather(
+            *(
+                client.post(
+                    "/v1/auth/password/reset",
+                    json={"token": token, "new_password": f"{NEW_PASSWORD}-{index}"},
+                )
+                for index, token in enumerate(tokens)
+            )
+        )
+    assert sorted(response.status_code for response in responses) == [204, 400]
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/auth/password/forgot", {}),
+        ("/v1/auth/register", {"password": NEW_PASSWORD, "name": "Someone"}),
+        ("/v1/auth/verify-email/resend", {}),
+    ],
+)
+async def test_account_lookups_happen_after_the_response(
+    app, session_factory, test_db_engine, test_password_hash, path, body
+):
+    """Responses must not depend on whether an account exists, timing included (M10)."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event
+
+    await create_user(
+        session_factory,
+        email="known@example.com",
+        hashed_password=test_password_hash,
+        verified=False,
+    )
+    responded: list[bool] = []
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if not responded:
+            statements.append(" ".join(statement.split()))
+
+    async def watched(scope, receive, send):
+        async def mark(message):
+            if message["type"] == "http.response.start":
+                responded.append(True)
+            await send(message)
+
+        await app(scope, receive, mark)
+
+    event.listen(test_db_engine.sync_engine, "before_cursor_execute", record)
+    before_response = []
+    async with AsyncClient(transport=ASGITransport(app=watched), base_url="http://localhost") as c:
+        for email in ("known@example.com", "unknown@example.com"):
+            responded.clear()
+            statements.clear()
+            response = await c.post(path, json={**body, "email": email})
+            assert response.status_code == 202
+            before_response.append(list(statements))
+    event.remove(test_db_engine.sync_engine, "before_cursor_execute", record)
+    assert before_response[0] == before_response[1] == []

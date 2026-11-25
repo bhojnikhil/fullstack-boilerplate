@@ -23,8 +23,8 @@ from alembic import command
 from app.core.client import ClientInfo, Platform
 from app.core.config import Settings, postgres_url
 from app.core.security import PASSWORDS
+from app.factory import create_app
 from app.integrations.google_id_token import GoogleIdentity, GoogleTokenError, identity_from_claims
-from app.main import create_app
 from app.modules.auth.models import SignInMethod, User
 from app.modules.auth.sessions import IssuedTokens, SessionService
 
@@ -129,6 +129,8 @@ class FakeGoogleVerifier:
         email_verified: bool = True,
         name: str | None = "Google User",
         issued_at: datetime | None = None,
+        # Tests treat example.com as a Google Workspace domain unless told otherwise.
+        hosted_domain: str | None = "example.com",
     ) -> str:
         token = f"google-id-token-{uuid4().hex}"
         # Parsed by the real claim handling, like a verified token would be.
@@ -140,6 +142,7 @@ class FakeGoogleVerifier:
                 "name": name,
                 "picture": "https://example.com/avatar.png",
                 "iat": int((issued_at or datetime.now(UTC)).timestamp()),
+                **({"hd": hosted_domain} if hosted_domain else {}),
             }
         )
         return token

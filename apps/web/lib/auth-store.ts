@@ -54,25 +54,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
   register: async (email: string, name: string, password: string) => {
     set({ isLoading: true, error: null });
     try {
-      // The response is the same for new and existing addresses (no account
-      // enumeration), so sign in with the chosen password to continue.
       await api.register(email, name, password);
+      set({ isLoading: false });
     } catch (error) {
-      set({
-        error: errorDetail(error, "Registration failed"),
-        isLoading: false,
-      });
-      throw error;
-    }
-    try {
-      const { user } = await api.login(email, password);
-      set({ user, isLoading: false });
-    } catch (error) {
-      set({
-        error:
-          "Check your email to continue. If you already have an account, sign in or reset your password.",
-        isLoading: false,
-      });
+      set({ error: errorDetail(error, "Registration failed"), isLoading: false });
       throw error;
     }
   },
@@ -91,3 +76,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
     return session !== null;
   },
 }));
+
+if (typeof window !== "undefined") {
+  window.addEventListener("auth-session-changed", () => {
+    useAuthStore.setState({ user: null });
+    window.location.href = "/auth/login";
+  });
+}

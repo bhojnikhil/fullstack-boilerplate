@@ -115,6 +115,22 @@ async def deliver(backend: EmailBackend, email: Email) -> None:
         log.exception("email_delivery_failed", template=email.template)
 
 
+class MailSender(Protocol):
+    def send(self, template: Template, to: str, **context: str) -> None: ...
+
+
+class CollectedMail:
+    """Renders and collects messages; the owner delivers them after its commit."""
+
+    def __init__(self, config: Settings) -> None:
+        self.config = config
+        self.emails: list[Email] = []
+
+    def send(self, template: Template, to: str, **context: str) -> None:
+        subject, text, html = render(template, self.config, context)
+        self.emails.append(Email(template, to, subject, text, html))
+
+
 class Mailer:
     def __init__(self, backend: EmailBackend, config: Settings, tasks: BackgroundTasks) -> None:
         self.backend = backend

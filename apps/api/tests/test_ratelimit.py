@@ -160,3 +160,41 @@ async def test_login_limits_work_with_the_postgres_backend(app, client, session_
     locked = await client.post("/v1/auth/login", json={**body, "password": "testpassword123"})
     assert locked.status_code == 429
     assert 25 <= int(locked.headers["retry-after"]) <= 30
+
+
+async def test_failed_sign_ins_do_not_exhaust_a_small_pool(
+    test_db_engine, database_url, secret_key, test_user
+):
+    """Counters are written while the request holds a connection; sharing one pool
+    would make each request wait on itself (M7)."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.factory import create_app
+
+    async with test_db_engine.connect() as connection:
+        schema = await connection.scalar(text("SELECT current_schema()"))
+    url = database_url.update_query_dict({"options": f"-csearch_path={schema}"})
+    config = Settings(
+        env="test",
+        database_url=url.render_as_string(hide_password=False),
+        secret_key=secret_key,
+        email_backend="memory",
+        rate_limit_backend="postgres",
+        _env_file=None,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_timeout=2)
+    app = create_app(config, async_sessionmaker(engine, expire_on_commit=False))
+    body = {"email": "test@example.com", "password": "wrong-password"}
+    try:
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client,
+        ):
+            responses = await asyncio.gather(
+                *(client.post("/v1/auth/login", json=body) for _ in range(3))
+            )
+    finally:
+        await engine.dispose()
+    assert [response.status_code for response in responses] == [401, 401, 401]

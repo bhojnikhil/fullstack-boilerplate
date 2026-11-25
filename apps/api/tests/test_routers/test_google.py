@@ -50,9 +50,11 @@ async def test_new_google_user_is_created_verified_and_linked(client, google, se
         "user_id",
         "provider",
         "provider_account_id",
+        "state",
         "created_at",
         "updated_at",
     }
+    assert account.state == "linked"
     async with session_factory() as session:
         auth_session = await session.scalar(select(AuthSession))
     assert (auth_session.sign_in_method, auth_session.device_name) == ("google", "iPhone")
@@ -101,23 +103,39 @@ async def test_verified_local_account_is_linked_automatically(
     assert event.details == {"automatic": True}
 
 
-async def test_unverified_local_account_requires_explicit_linking(
-    client, google, session_factory, test_password_hash
+async def test_google_claims_an_unverified_account_from_its_inbox_owner(
+    client, google, session_factory, config, test_password_hash
 ):
-    owner = await create_user(
+    """Someone pre-registered the address (password, session, legacy link). Google
+    proves the inbox, so the owner takes the account and the other credentials go."""
+    squatter = await create_user(
         session_factory,
         email="victim@example.com",
         hashed_password=test_password_hash,
         verified=False,
     )
+    squatter_session = await sign_in(session_factory, config, squatter)
+    async with session_factory.begin() as session:
+        session.add(
+            OAuthAccount(
+                user_id=squatter.id,
+                provider="google",
+                provider_account_id="squatter-google",
+                state="unconfirmed",
+            )
+        )
     response = await google_sign_in(client, google.issue(email="victim@example.com"))
-    error = assert_error(response, 409, "google_link_required")
-    assert "Sign in" in error["message"]
-    assert await linked_accounts(session_factory) == []
+    assert response.status_code == 200
+    assert response.json()["user"]["sign_in_methods"] == ["google"]
+    assert response.json()["user"]["email_verified"] is True
     async with session_factory() as session:
-        assert await session.scalar(select(AuthSession)) is None
-        assert (await session.get(User, owner.id)).email_verified_at is None
-    assert await events(session_factory) == ["login_failed"]
+        claimed = await session.get(User, squatter.id)
+        [link] = await session.scalars(select(OAuthAccount))
+    assert claimed.hashed_password is None
+    assert (link.provider_account_id, link.state) == ("google-subject-1", "linked")
+    assert_error(await client.get("/v1/me", headers=bearer(squatter_session)), 401, "invalid_token")
+    assert_error(await login(client, email="victim@example.com"), 401, "invalid_credentials")
+    assert "account_claimed" in await events(session_factory)
 
 
 async def test_unverified_google_email_never_creates_or_links(
@@ -150,10 +168,42 @@ async def test_google_sign_in_marks_matching_unverified_email_verified(
     user = await create_user(session_factory, email="later@example.com", verified=False)
     async with session_factory.begin() as session:
         session.add(OAuthAccount(user_id=user.id, provider="google", provider_account_id="sub-7"))
-    response = await google_sign_in(
-        client, google.issue(subject="sub-7", email="later@example.com")
-    )
-    assert response.json()["user"]["email_verified"] is True
+    # A non-authoritative address does not prove the inbox today.
+    unproven = google.issue(subject="sub-7", email="later@example.com", hosted_domain=None)
+    assert (await google_sign_in(client, unproven)).json()["user"]["email_verified"] is False
+    proven = google.issue(subject="sub-7", email="later@example.com")
+    assert (await google_sign_in(client, proven)).json()["user"]["email_verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("email", "hosted_domain", "authoritative"),
+    [
+        ("someone@gmail.com", None, True),
+        ("someone@example.com", "example.com", True),  # Workspace account on its own domain.
+        ("someone@example.com", None, False),  # A third-party address verified once.
+        ("someone@example.com", "other.example", False),
+    ],
+)
+async def test_only_authoritative_addresses_create_or_link_accounts(
+    client, google, session_factory, email, hosted_domain, authoritative
+):
+    token = google.issue(email=email, hosted_domain=hosted_domain)
+    response = await google_sign_in(client, token)
+    if authoritative:
+        assert response.status_code == 200
+    else:
+        assert_error(response, 403, "google_email_unverified")
+        assert await linked_accounts(session_factory) == []
+        async with session_factory() as session:
+            assert await session.scalar(select(User)) is None
+
+
+async def test_third_party_address_cannot_take_over_an_existing_account(
+    client, google, session_factory, test_user
+):
+    token = google.issue(email="test@example.com", hosted_domain=None)
+    assert_error(await google_sign_in(client, token), 403, "google_email_unverified")
+    assert await linked_accounts(session_factory) == []
 
 
 async def test_inactive_google_user_cannot_sign_in(client, google, session_factory, test_user):
@@ -161,6 +211,30 @@ async def test_inactive_google_user_cannot_sign_in(client, google, session_facto
         await session.execute(update(User).values(is_active=False))
     response = await google_sign_in(client, google.issue(email="test@example.com"))
     assert_error(response, 403, "inactive_user")
+    # Checked before anything changes: no link was made.
+    assert await linked_accounts(session_factory) == []
+    assert "login_failed" in await events(session_factory)
+
+
+async def test_invalid_google_tokens_are_audited(client, session_factory):
+    assert_error(await google_sign_in(client, "not-a-google-token"), 401, "invalid_google_token")
+    async with session_factory() as session:
+        [event] = await session.scalars(select(AuditEvent))
+    assert (event.event, event.details) == (
+        "login_failed",
+        {"method": "google", "reason": "invalid_token"},
+    )
+
+
+async def test_google_session_is_as_fresh_as_its_token(client, google, session_factory):
+    """A 40-minute-old ID token must not unlock actions that need recent sign-in."""
+    issued = datetime.now(UTC) - timedelta(minutes=40)
+    response = await google_sign_in(client, google.issue(email="old@gmail.com", issued_at=issued))
+    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
+    assert_error(await client.delete("/v1/me", headers=headers), 403, "reauthentication_required")
+    fresh = await google_sign_in(client, google.issue(email="old@gmail.com"))
+    headers = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
+    assert (await client.delete("/v1/me", headers=headers)).status_code == 204
 
 
 async def test_google_errors(client, app, google, config):
@@ -192,28 +266,45 @@ async def test_explicit_link_after_signing_in(
     client, google, session_factory, config, test_password_hash
 ):
     owner = await create_user(
-        session_factory,
-        email="owner@example.com",
-        hashed_password=test_password_hash,
-        verified=False,
+        session_factory, email="owner@example.com", hashed_password=test_password_hash
     )
     signed_in = await login(client, email="owner@example.com")
     headers = {"Authorization": f"Bearer {signed_in.json()['access_token']}"}
-    token = google.issue(subject="owner-sub", email="owner@example.com")
+    # Any Google account can be linked explicitly, even one on another address.
+    token = google.issue(
+        subject="owner-sub", email="owner.elsewhere@other.example", hosted_domain=None
+    )
 
     linked = await client.post("/v1/auth/google/link", json={"id_token": token}, headers=headers)
     assert linked.status_code == 204
     [account] = await linked_accounts(session_factory)
-    assert (account.user_id, account.provider_account_id) == (owner.id, "owner-sub")
+    assert (account.user_id, account.provider_account_id, account.state) == (
+        owner.id,
+        "owner-sub",
+        "linked",
+    )
     profile = (await client.get("/v1/me", headers=headers)).json()
     assert profile["sign_in_methods"] == ["password", "google"]
-    assert profile["email_verified"] is True  # Google verified the same address.
     # Linking the same identity again is a no-op.
     again = await client.post("/v1/auth/google/link", json={"id_token": token}, headers=headers)
     assert again.status_code == 204
-    # Now Google sign-in works for this account.
-    response = await google_sign_in(client, google.issue(subject="owner-sub", email="x@gmail.com"))
+    # Now Google sign-in works for this account, through the link.
+    response = await google_sign_in(
+        client, google.issue(subject="owner-sub", email="x@other.example", hosted_domain=None)
+    )
     assert response.json()["user"]["id"] == str(owner.id)
+
+
+async def test_unverified_accounts_cannot_add_sign_in_methods(
+    client, google, session_factory, config
+):
+    user = await create_user(session_factory, email="unproven@example.com", verified=False)
+    headers = bearer(await sign_in(session_factory, config, user))
+    response = await client.post(
+        "/v1/auth/google/link", json={"id_token": google.issue()}, headers=headers
+    )
+    assert_error(response, 403, "email_verification_required")
+    assert await linked_accounts(session_factory) == []
 
 
 async def test_link_requires_recent_authentication(
@@ -255,17 +346,47 @@ async def test_link_conflicts(client, google, session_factory, config, test_user
     assert_error(auto, 409, "google_already_linked")
 
 
-async def test_unlink(client, google, session_factory, test_user, auth_headers):
+async def test_unlink(client, google, session_factory, config, test_user, auth_headers):
     assert_error(
         await client.delete("/v1/auth/google/link", headers=auth_headers), 404, "google_not_linked"
     )
     await client.post(
         "/v1/auth/google/link", json={"id_token": google.issue()}, headers=auth_headers
     )
+    google_session = await google_sign_in(client, google.issue(email="test@example.com"))
+    google_headers = {"Authorization": f"Bearer {google_session.json()['access_token']}"}
+
     response = await client.delete("/v1/auth/google/link", headers=auth_headers)
     assert response.status_code == 204
-    assert await linked_accounts(session_factory) == []
+    [account] = await linked_accounts(session_factory)
+    assert account.state == "unlinked"
+    profile = (await client.get("/v1/me", headers=auth_headers)).json()
+    assert profile["sign_in_methods"] == ["password"]
+    # Sessions started with Google end; the password session stays.
+    assert_error(await client.get("/v1/me", headers=google_headers), 401, "invalid_token")
     assert "google_unlinked" in await events(session_factory)
+
+    # The identity is not relinked behind the user's back...
+    again = await google_sign_in(client, google.issue(email="test@example.com"))
+    assert_error(again, 409, "google_link_required")
+    # ...but the user can relink it explicitly.
+    relink = await client.post(
+        "/v1/auth/google/link", json={"id_token": google.issue()}, headers=auth_headers
+    )
+    assert relink.status_code == 204
+    assert (await google_sign_in(client, google.issue(email="test@example.com"))).status_code == 200
+
+
+async def test_unlinking_from_a_google_session_signs_it_out(client, google, auth_headers):
+    await client.post(
+        "/v1/auth/google/link", json={"id_token": google.issue()}, headers=auth_headers
+    )
+    signed_in = await google_sign_in(client, google.issue(email="test@example.com"), headers=WEB)
+    headers = {**WEB, "Authorization": f"Bearer {signed_in.json()['access_token']}"}
+    response = await client.delete("/v1/auth/google/link", headers=headers)
+    assert response.status_code == 204
+    assert cookies(response)["refresh_token"]["max-age"] == "0"
+    assert_error(await client.get("/v1/me", headers=headers), 401, "invalid_token")
 
 
 async def test_unlink_keeps_at_least_one_sign_in_method(client, google, session_factory):
@@ -318,7 +439,9 @@ async def test_google_reauthentication(
         assert response.status_code == 204
         async with session_factory() as session:
             refreshed = await session.get(AuthSession, issued.session.id)
-        assert refreshed.authenticated_at > STALE
+        # Stamped with the token's issue time (whole seconds), not the request time.
+        expected_time = (datetime.now(UTC) - issued_ago).replace(microsecond=0)
+        assert abs((refreshed.authenticated_at - expected_time).total_seconds()) <= 2
     else:
         assert_error(response, 403, "reauthentication_failed")
 
@@ -375,3 +498,38 @@ async def test_concurrent_link_of_the_same_identity_is_not_an_error(
     assert response.status_code == 200
     assert response.json()["user"]["id"] == str(test_user.id)
     assert len(await linked_accounts(session_factory)) == 1
+
+
+async def test_google_sign_in_rechecks_link_after_waiting_for_user_lock(
+    client, google, session_factory, test_user, auth_headers, monkeypatch
+):
+    import asyncio
+
+    from app.modules.auth.repository import OAuthAccountRepository
+
+    token = google.issue(email="test@example.com")
+    assert (
+        await client.post("/v1/auth/google/link", json={"id_token": token}, headers=auth_headers)
+    ).status_code == 204
+    read, resume = asyncio.Event(), asyncio.Event()
+    original = OAuthAccountRepository.get
+    paused = False
+
+    async def delayed_get(self, provider, subject):
+        nonlocal paused
+        account = await original(self, provider, subject)
+        if not paused:
+            paused = True
+            read.set()
+            await resume.wait()
+        return account
+
+    monkeypatch.setattr(OAuthAccountRepository, "get", delayed_get)
+    async with asyncio.timeout(10):
+        pending = asyncio.create_task(google_sign_in(client, token))
+        await read.wait()
+        assert (
+            await client.delete("/v1/auth/google/link", headers=auth_headers)
+        ).status_code == 204
+        resume.set()
+        assert_error(await pending, 409, "google_link_required")

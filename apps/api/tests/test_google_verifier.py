@@ -1,5 +1,6 @@
 """GoogleIdTokenVerifier against tokens signed with local RSA keys (no network)."""
 
+import base64
 import json
 import time
 from datetime import UTC, datetime
@@ -229,3 +230,16 @@ def test_cached_transport_only_serves_the_certificate_url():
 def test_incomplete_claims_are_rejected(claims):
     with pytest.raises(GoogleTokenError):
         google_id_token.identity_from_claims(claims)
+
+
+@pytest.mark.parametrize("kid", [7, ["key-a"], {"id": "key-a"}, None])
+async def test_missing_or_non_string_key_ids_are_invalid_tokens(kid):
+    def part(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
+    header = {"alg": "RS256", **({"kid": kid} if kid is not None else {})}
+    token = f"{part(header)}.{part({'sub': '1'})}.c2lnbmF0dXJl"
+    server = CertsServer({"key-a": KEY_A[1]})
+    with pytest.raises(GoogleTokenError):
+        await verifier(server).verify(token)
+    assert server.requests == []  # Rejected before any certificate fetch.

@@ -1,5 +1,6 @@
 """The signed-in user's account: /v1/me."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text
@@ -147,17 +148,18 @@ async def test_links_sent_to_the_previous_address_stop_working(
     assert_error(response, 400, "invalid_or_expired_token")
 
 
-async def test_verification_link_for_an_old_address_is_rejected(
-    client, outbox, session_factory, config
-):
-    user = await create_user(session_factory, email="first@example.com", verified=False)
-    headers = bearer(await sign_in(session_factory, config, user))
-    await client.post("/v1/auth/verify-email/resend", headers=headers)
+async def test_verification_link_for_an_old_address_is_rejected(client, outbox, session_factory):
+    await client.post(
+        "/v1/auth/register",
+        json={"email": "first@example.com", "password": NEW_PASSWORD, "name": "First"},
+    )
     stale_link = token_from(outbox[-1])
-    # Point the token at a different address, as if the account email changed meanwhile.
+    # Point the account at a different address, as if its email changed meanwhile.
     async with session_factory.begin() as session:
         await session.execute(text("UPDATE users SET email = 'second@example.com'"))
-    response = await client.post("/v1/auth/verify-email", json={"token": stale_link})
+    response = await client.post(
+        "/v1/auth/verify-email", json={"token": stale_link, "password": NEW_PASSWORD}
+    )
     assert_error(response, 400, "invalid_or_expired_token")
 
 
@@ -182,23 +184,32 @@ async def test_change_email_confirmation_fails_if_the_address_was_taken_since(
     assert_error(response, 409, "email_in_use")
 
 
-async def test_change_email_confirmation_relies_on_the_unique_index_under_races(
-    client, outbox, session_factory, auth_headers, monkeypatch
+async def test_email_change_racing_a_registration_raises_no_database_error(
+    client, outbox, session_factory, auth_headers, test_db_engine
 ):
+    """A unique violation would put the address in Postgres's error log."""
+    from sqlalchemy import event
+
     from app.modules.auth.repository import UserRepository
 
     await client.post("/v1/me/email", json={"new_email": "race@example.com"}, headers=auth_headers)
-    await create_user(session_factory, email="RACE@example.com")
-    lookup = UserRepository.get_by_email
-
-    async def stale_lookup(self, email):
-        # The check ran before the other account was committed.
-        return None if email == "race@example.com" else await lookup(self, email)
-
-    monkeypatch.setattr(UserRepository, "get_by_email", stale_lookup)
-    response = await client.post("/v1/auth/email/confirm", json={"token": token_from(outbox[0])})
+    database_errors: list[str] = []
+    event.listen(
+        test_db_engine.sync_engine,
+        "handle_error",
+        lambda context: database_errors.append(type(context.original_exception).__name__),
+    )
+    async with session_factory() as registration, registration.begin():
+        # A registration for the same address, not yet committed.
+        await UserRepository(registration).create("Race@example.com", "Racer")
+        confirm = asyncio.create_task(
+            client.post("/v1/auth/email/confirm", json={"token": token_from(outbox[0])})
+        )
+        await asyncio.sleep(0.3)  # The confirmation waits on the address's lock.
+        assert not confirm.done()
+    response = await confirm
     assert_error(response, 409, "email_in_use")
-    monkeypatch.undo()
+    assert database_errors == []
     assert (await client.get("/v1/me", headers=auth_headers)).json()["email"] == "test@example.com"
 
 
@@ -313,3 +324,88 @@ async def test_deletion_hooks_can_block_or_clean_up(
     assert (await client.delete("/v1/me", headers=auth_headers)).status_code == 204
     assert cleanup.calls == ["check", "before_delete"]
     assert await count(session_factory, User) == 0
+
+
+async def test_unverified_accounts_cannot_start_an_email_change(
+    client, outbox, session_factory, config
+):
+    user = await create_user(session_factory, email="unproven@example.com", verified=False)
+    headers = bearer(await sign_in(session_factory, config, user))
+    response = await client.post(
+        "/v1/me/email", json={"new_email": "elsewhere@example.com"}, headers=headers
+    )
+    assert_error(response, 403, "email_verification_required")
+    assert outbox == []
+
+
+async def test_password_reset_cancels_pending_email_changes(
+    client, outbox, session_factory, auth_headers
+):
+    """Whoever had a session (maybe not the owner) cannot finish an email change after
+    the owner resets the password (B2)."""
+    await client.post(
+        "/v1/me/email", json={"new_email": "attacker@example.com"}, headers=auth_headers
+    )
+    change_link = token_from(outbox[-1])
+    await client.post("/v1/auth/password/forgot", json={"email": "test@example.com"})
+    reset = await client.post(
+        "/v1/auth/password/reset",
+        json={"token": token_from(outbox[-1]), "new_password": NEW_PASSWORD},
+    )
+    assert reset.status_code == 204
+    late = await client.post("/v1/auth/email/confirm", json={"token": change_link})
+    assert_error(late, 400, "invalid_or_expired_token")
+    assert_error(await client.get("/v1/me", headers=auth_headers), 401, "invalid_token")
+
+
+async def test_reset_of_an_unverified_account_removes_unproven_identities(
+    client, outbox, session_factory, config, test_password_hash
+):
+    """Identities linked before anyone proved the inbox go when the owner resets (B2)."""
+    user = await create_user(
+        session_factory,
+        email="legacy@example.com",
+        hashed_password=test_password_hash,
+        verified=False,
+    )
+    squatter_session = await sign_in(session_factory, config, user)
+    async with session_factory.begin() as session:
+        session.add(
+            OAuthAccount(
+                user_id=user.id,
+                provider="google",
+                provider_account_id="legacy-google",
+                state="unconfirmed",
+            )
+        )
+    await client.post("/v1/auth/password/forgot", json={"email": "legacy@example.com"})
+    reset = await client.post(
+        "/v1/auth/password/reset",
+        json={"token": token_from(outbox[-1]), "new_password": NEW_PASSWORD},
+    )
+    assert reset.status_code == 204
+    assert await count(session_factory, OAuthAccount) == 0
+    assert_error(await client.get("/v1/me", headers=bearer(squatter_session)), 401, "invalid_token")
+    signed_in = await login(client, email="legacy@example.com", password=NEW_PASSWORD)
+    assert signed_in.json()["user"]["sign_in_methods"] == ["password"]
+
+
+async def test_email_change_and_reauthentication_are_rate_limited_per_ip(app, client, auth_headers):
+    from app.core.ratelimit import Rule
+
+    limiter = app.state.rate_limiter
+    limiter.overrides["email_change_ip"] = Rule("email_change_ip", 1, timedelta(hours=1))
+    limiter.overrides["reauth_ip"] = Rule("reauth_ip", 1, timedelta(minutes=15))
+    body = {"new_email": "first@example.com"}
+    assert (await client.post("/v1/me/email", json=body, headers=auth_headers)).status_code == 202
+    assert_error(
+        await client.post("/v1/me/email", json=body, headers=auth_headers), 429, "rate_limited"
+    )
+    reauth = {"password": TEST_PASSWORD}
+    first = await client.post("/v1/auth/reauthenticate", json=reauth, headers=auth_headers)
+    assert first.status_code == 204
+    assert_error(
+        await client.post("/v1/auth/reauthenticate", json=reauth, headers=auth_headers),
+        429,
+        "rate_limited",
+    )

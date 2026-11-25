@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx
+import jwt
 import pytest
 from sqlalchemy import select, text
 
@@ -17,7 +18,7 @@ from app.core.config import LOCAL_SECRET, Settings
 from app.core.ratelimit import Rule
 from app.core.security import InvalidAccessTokenError, create_access_token, decode_access_token
 from app.integrations.google_id_token import CERTS_URL, GoogleIdTokenVerifier, GoogleTokenError
-from app.modules.auth.models import OAuthAccount, User
+from app.modules.auth.models import User
 from tests.conftest import TEST_PASSWORD
 from tests.test_http_contract import assert_error
 from tests.test_routers.test_auth import MOBILE, WEB, login, token_from
@@ -56,46 +57,80 @@ async def test_defect1_cross_site_requests_cannot_sign_a_browser_in(client, goog
 # attacker who pre-registered the victim's email kept access after a Google sign-in.
 
 
-async def test_defect2_pre_registered_account_is_not_linked_to_google(
+async def test_defect2_pre_registration_cannot_capture_the_account(client, google, outbox):
+    attacker_password = "attacker-chosen-password"
+    owner_password = "the-real-owners-password"
+    address = "victim@example.com"
+    await client.post(
+        "/v1/auth/register",
+        json={"email": address, "password": attacker_password, "name": "Attacker"},
+    )
+    attacker_link = token_from(outbox[-1])
+    # No usable password before the inbox is proven, so no attacker sessions either.
+    assert_error(
+        await login(client, email=address, password=attacker_password), 401, "invalid_credentials"
+    )
+    # The owner opening that link cannot activate a password they did not choose.
+    clicked = await client.post(
+        "/v1/auth/verify-email", json={"token": attacker_link, "password": owner_password}
+    )
+    assert_error(clicked, 401, "invalid_credentials")
+
+    # The owner registers: the newest pending password replaces the attacker's.
+    await client.post(
+        "/v1/auth/register", json={"email": address, "password": owner_password, "name": "Owner"}
+    )
+    owner_link = token_from(outbox[-1])
+    verified = await client.post(
+        "/v1/auth/verify-email", json={"token": owner_link, "password": owner_password}
+    )
+    assert verified.status_code == 204
+    for token in (attacker_link, owner_link):
+        dead = await client.post(
+            "/v1/auth/verify-email", json={"token": token, "password": attacker_password}
+        )
+        assert_error(dead, 400, "invalid_or_expired_token")
+    assert_error(
+        await login(client, email=address, password=attacker_password), 401, "invalid_credentials"
+    )
+    assert (await login(client, email=address, password=owner_password)).status_code == 200
+
+    # Google then links automatically to the owner's verified account.
+    signed_in = await client.post(
+        "/v1/auth/google",
+        json={"id_token": google.issue(subject="owner-google", email=address)},
+        headers=MOBILE,
+    )
+    assert signed_in.status_code == 200
+    assert signed_in.json()["user"]["sign_in_methods"] == ["password", "google"]
+
+
+async def test_defect2_google_sign_in_claims_a_pre_registered_address(
     client, google, outbox, session_factory
 ):
     attacker_password = "attacker-chosen-password"
-    registered = await client.post(
+    await client.post(
         "/v1/auth/register",
         json={"email": "victim@gmail.com", "password": attacker_password, "name": "Attacker"},
     )
-    assert registered.status_code == 202
-    attacker = await login(client, email="victim@gmail.com", password=attacker_password)
-    attacker_headers = {"Authorization": f"Bearer {attacker.json()['access_token']}"}
-
-    victim_token = google.issue(subject="victim-google", email="victim@gmail.com")
-    response = await client.post("/v1/auth/google", json={"id_token": victim_token}, headers=MOBILE)
-    assert_error(response, 409, "google_link_required")
-    async with session_factory() as session:
-        assert (await session.scalars(select(OAuthAccount))).all() == []
-
-    # The inbox owner recovers the account: a reset proves control of the address and
-    # signs out every session, including the attacker's.
-    await client.post("/v1/auth/password/forgot", json={"email": "victim@gmail.com"})
-    reset = await client.post(
-        "/v1/auth/password/reset",
-        json={"token": token_from(outbox[-1]), "new_password": "the-real-owners-password"},
+    attacker_link = token_from(outbox[-1])
+    signed_in = await client.post(
+        "/v1/auth/google",
+        json={"id_token": google.issue(subject="victim-google", email="victim@gmail.com")},
+        headers=MOBILE,
     )
-    assert reset.status_code == 204
-    assert_error(await client.get("/v1/me", headers=attacker_headers), 401, "invalid_token")
+    assert signed_in.status_code == 200
+    assert signed_in.json()["user"]["sign_in_methods"] == ["google"]
+    # Google proved the inbox, so the attacker's pending password is gone for good.
+    late = await client.post(
+        "/v1/auth/verify-email", json={"token": attacker_link, "password": attacker_password}
+    )
+    assert_error(late, 400, "invalid_or_expired_token")
     assert_error(
         await login(client, email="victim@gmail.com", password=attacker_password),
         401,
         "invalid_credentials",
     )
-    # Both sides are verified now, so Google sign-in links automatically.
-    linked = await client.post(
-        "/v1/auth/google",
-        json={"id_token": google.issue(subject="victim-google", email="victim@gmail.com")},
-        headers=MOBILE,
-    )
-    assert linked.status_code == 200
-    assert linked.json()["user"]["sign_in_methods"] == ["password", "google"]
 
 
 async def test_defect2_registration_does_not_verify_email(client, session_factory):
@@ -141,6 +176,7 @@ def test_defect4_production_requires_its_own_jwt_secret(jwt_secret):
             jwt_secret_key=jwt_secret,
             database_url="postgresql://app:app@db.example/app",
             email_backend="smtp",
+            smtp_security="starttls",
             web_url="https://web.example",
         )
 
@@ -153,6 +189,7 @@ def test_defect4_tokens_signed_with_a_development_key_are_rejected(config):
         jwt_secret_key="production-jwt-secret-" * 3,
         database_url="postgresql://app:app@db.example/app",
         email_backend="smtp",
+        smtp_security="starttls",
         web_url="https://web.example",
     )
     development = Settings(_env_file=None, env="development", secret_key=LOCAL_SECRET)
@@ -169,6 +206,8 @@ def test_defect4_tokens_signed_with_a_development_key_are_rejected(config):
 async def test_defect5_access_tokens_are_short_lived(client, test_user):
     body = (await login(client)).json()
     assert body["expires_in"] == 15 * 60
+    claims = jwt.decode(body["access_token"], options={"verify_signature": False})
+    assert claims["exp"] - claims["iat"] == 15 * 60
     assert Settings.model_fields["access_token_expire_minutes"].default == 15
 
 

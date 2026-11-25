@@ -2,14 +2,21 @@
 
 Expiry checks use the application clock, the same clock that computed the
 expiry times, so they do not depend on the database server's clock.
+
+Locking order: anything that changes a user's credentials, sessions or emailed
+tokens locks the user row first (``UserRepository.lock``), then other rows. Code
+that creates a user or changes an email also takes the address's advisory lock
+(``lock_email``) so two requests cannot race for one address.
 """
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import Select, and_, delete, exists, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.pagination import Cursor
 from app.modules.auth.models import (
@@ -17,11 +24,19 @@ from app.modules.auth.models import (
     AccountTokenPurpose,
     AuthSession,
     OAuthAccount,
+    OAuthLinkState,
     OAuthProvider,
     RefreshToken,
     SessionRevocation,
+    SignInMethod,
     User,
 )
+
+
+async def lock_email(db: AsyncSession, email: str) -> None:
+    """Serialize work on one email address until the transaction ends."""
+    digest = hashlib.sha256(b"email:" + email.strip().lower().encode()).digest()
+    await db.execute(select(func.pg_advisory_xact_lock(int.from_bytes(digest[:8], signed=True))))
 
 
 class UserRepository:
@@ -36,23 +51,32 @@ class UserRepository:
         stmt = select(User).where(func.lower(User.email) == email.lower())
         return await self._db.scalar(stmt)
 
+    async def lock(self, user_id: uuid.UUID) -> User | None:
+        """Lock the user row and reload it, so checks see the latest committed state."""
+        stmt = (
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return await self._db.scalar(stmt)
+
     async def create(
         self,
         email: str,
         name: str,
         *,
-        hashed_password: str | None = None,
         avatar_url: str | None = None,
         email_verified_at: datetime | None = None,
     ) -> User | None:
-        """Insert a user, or return None if the email is already taken (even concurrently)."""
+        """Insert a user without a password, or return None if the email is taken."""
+        await lock_email(self._db, email)
         stmt = (
             insert(User)
             .values(
                 id=uuid.uuid4(),
                 email=email,
                 name=name,
-                hashed_password=hashed_password,
                 avatar_url=avatar_url,
                 email_verified_at=email_verified_at,
                 is_active=True,
@@ -61,6 +85,27 @@ class UserRepository:
             .returning(User)
         )
         return await self._db.scalar(stmt)
+
+    async def change_email(self, user: User, email: str) -> bool:
+        """Switch to a verified address unless another account uses it (no error raised)."""
+        await lock_email(self._db, email)
+        other = aliased(User)
+        stmt = (
+            update(User)
+            .where(
+                User.id == user.id,
+                ~exists().where(
+                    and_(func.lower(other.email) == email.lower(), other.id != user.id)
+                ),
+            )
+            .values(email=email, email_verified_at=datetime.now(UTC))
+            .returning(User.id)
+            .execution_options(synchronize_session=False)
+        )
+        changed = await self._db.scalar(stmt) is not None
+        if changed:
+            await self.lock(user.id)  # Reload the changed row into the session.
+        return changed
 
     async def delete(self, user: User) -> None:
         await self._db.delete(user)
@@ -72,8 +117,10 @@ class OAuthAccountRepository:
         self._db = db
 
     async def get(self, provider: OAuthProvider, subject: str) -> OAuthAccount | None:
-        stmt = select(OAuthAccount).where(
-            OAuthAccount.provider == provider, OAuthAccount.provider_account_id == subject
+        stmt = (
+            select(OAuthAccount)
+            .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == subject)
+            .execution_options(populate_existing=True)
         )
         return await self._db.scalar(stmt)
 
@@ -86,12 +133,45 @@ class OAuthAccountRepository:
         return await self._db.scalar(stmt)
 
     async def providers_for_user(self, user_id: uuid.UUID) -> list[OAuthProvider]:
-        stmt = select(OAuthAccount.provider).where(OAuthAccount.user_id == user_id)
+        """Providers the user can sign in with."""
+        stmt = select(OAuthAccount.provider).where(
+            OAuthAccount.user_id == user_id, OAuthAccount.state == OAuthLinkState.LINKED
+        )
         return sorted(OAuthProvider(provider) for provider in await self._db.scalars(stmt))
+
+    async def add(self, user_id: uuid.UUID, provider: OAuthProvider, subject: str) -> bool:
+        """Insert a usable link. False if the subject or the user's provider slot is taken."""
+        stmt = (
+            insert(OAuthAccount)
+            .values(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                provider=provider,
+                provider_account_id=subject,
+                state=OAuthLinkState.LINKED,
+            )
+            .on_conflict_do_nothing()
+            .returning(OAuthAccount.id)
+        )
+        return await self._db.scalar(stmt) is not None
 
     async def delete(self, account: OAuthAccount) -> None:
         await self._db.delete(account)
         await self._db.flush()
+
+    async def delete_for_user(
+        self, user_id: uuid.UUID, *, state: OAuthLinkState | None = None
+    ) -> int:
+        conditions = [OAuthAccount.user_id == user_id]
+        if state is not None:
+            conditions.append(OAuthAccount.state == state)
+        stmt = (
+            delete(OAuthAccount)
+            .where(*conditions)
+            .returning(OAuthAccount.id)
+            .execution_options(synchronize_session="fetch")
+        )
+        return len((await self._db.scalars(stmt)).all())
 
 
 class SessionRepository:
@@ -167,17 +247,21 @@ class SessionRepository:
         reason: SessionRevocation,
         *,
         keep: uuid.UUID | None = None,
-    ) -> int:
+        method: SignInMethod | None = None,
+    ) -> list[uuid.UUID]:
+        """Revoke the user's active sessions (optionally only one sign-in method's)."""
         stmt = (
             update(AuthSession)
             .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
             .values(revoked_at=datetime.now(UTC), revoked_reason=reason)
             .returning(AuthSession.id)
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session="fetch")
         )
         if keep is not None:
             stmt = stmt.where(AuthSession.id != keep)
-        return len((await self._db.scalars(stmt)).all())
+        if method is not None:
+            stmt = stmt.where(AuthSession.sign_in_method == method)
+        return list((await self._db.scalars(stmt)).all())
 
 
 class AccountTokenRepository:
@@ -191,6 +275,8 @@ class AccountTokenRepository:
         token_hash: str,
         email: str,
         expires_at: datetime,
+        *,
+        password_hash: str | None = None,
     ) -> None:
         self._db.add(
             AccountToken(
@@ -198,29 +284,48 @@ class AccountTokenRepository:
                 purpose=purpose,
                 token_hash=token_hash,
                 email=email,
+                password_hash=password_hash,
                 expires_at=expires_at,
                 created_at=datetime.now(UTC),
             )
         )
         await self._db.flush()
 
+    def _valid(self, purpose: AccountTokenPurpose, token_hash: str) -> Select[AccountToken]:
+        return select(AccountToken).where(
+            AccountToken.purpose == purpose,
+            AccountToken.token_hash == token_hash,
+            AccountToken.expires_at > datetime.now(UTC),
+        )
+
+    async def find_valid(
+        self, purpose: AccountTokenPurpose, token_hash: str
+    ) -> AccountToken | None:
+        return await self._db.scalar(self._valid(purpose, token_hash))
+
     async def lock_valid(
         self, purpose: AccountTokenPurpose, token_hash: str
     ) -> AccountToken | None:
+        """Re-read and lock the token. Call after locking its user (see the module docstring)."""
         stmt = (
-            select(AccountToken)
-            .where(
-                AccountToken.purpose == purpose,
-                AccountToken.token_hash == token_hash,
-                AccountToken.expires_at > datetime.now(UTC),
-            )
+            self._valid(purpose, token_hash)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return await self._db.scalar(stmt)
 
-    async def delete_for_user(self, user_id: uuid.UUID, purpose: AccountTokenPurpose) -> None:
-        await self._db.execute(
-            delete(AccountToken)
+    async def latest(self, user_id: uuid.UUID, purpose: AccountTokenPurpose) -> AccountToken | None:
+        stmt = (
+            select(AccountToken)
             .where(AccountToken.user_id == user_id, AccountToken.purpose == purpose)
-            .execution_options(synchronize_session=False)
+            .order_by(AccountToken.created_at.desc())
+            .limit(1)
         )
+        return await self._db.scalar(stmt)
+
+    async def delete_for_user(self, user_id: uuid.UUID, *purposes: AccountTokenPurpose) -> None:
+        """Delete the user's tokens of the given purposes (all purposes if none given)."""
+        stmt = delete(AccountToken).where(AccountToken.user_id == user_id)
+        if purposes:
+            stmt = stmt.where(AccountToken.purpose.in_(purposes))
+        await self._db.execute(stmt.execution_options(synchronize_session=False))

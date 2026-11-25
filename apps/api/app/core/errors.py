@@ -22,6 +22,7 @@ class ErrorCode(StrEnum):
     PASSWORD_NOT_SET = "password_not_set"
     REAUTHENTICATION_REQUIRED = "reauthentication_required"
     REAUTHENTICATION_FAILED = "reauthentication_failed"
+    EMAIL_VERIFICATION_REQUIRED = "email_verification_required"
     SESSION_NOT_FOUND = "session_not_found"
     EMAIL_IN_USE = "email_in_use"
     ACCOUNT_DELETION_BLOCKED = "account_deletion_blocked"
@@ -82,7 +83,10 @@ class RateLimitedError(DomainError):
 
 
 DOMAIN_ERRORS = {
-    ErrorCode.INVALID_CREDENTIALS: (401, "Incorrect email or password"),
+    ErrorCode.INVALID_CREDENTIALS: (
+        401,
+        "Incorrect email or password. New accounts can sign in after confirming their email.",
+    ),
     ErrorCode.INVALID_TOKEN: (401, "Could not validate credentials"),
     ErrorCode.INVALID_REFRESH_TOKEN: (401, "Session expired. Sign in again."),
     ErrorCode.INACTIVE_USER: (403, "Account is inactive"),
@@ -96,13 +100,17 @@ DOMAIN_ERRORS = {
     ErrorCode.PASSWORD_NOT_SET: (409, "This account has no password. Reset it to set one."),
     ErrorCode.REAUTHENTICATION_REQUIRED: (403, "Sign in again to continue"),
     ErrorCode.REAUTHENTICATION_FAILED: (403, "Could not confirm your identity"),
+    ErrorCode.EMAIL_VERIFICATION_REQUIRED: (403, "Confirm your email address first"),
     ErrorCode.SESSION_NOT_FOUND: (404, "Session not found"),
     ErrorCode.EMAIL_IN_USE: (409, "This email address is already in use"),
     ErrorCode.ACCOUNT_DELETION_BLOCKED: (409, "The account cannot be deleted yet"),
     ErrorCode.GOOGLE_SIGN_IN_DISABLED: (404, "Google sign-in is not enabled"),
     ErrorCode.INVALID_GOOGLE_TOKEN: (401, "Google sign-in failed"),
     ErrorCode.GOOGLE_UNAVAILABLE: (503, "Google sign-in is temporarily unavailable"),
-    ErrorCode.GOOGLE_EMAIL_UNVERIFIED: (403, "Your Google account's email is not verified"),
+    ErrorCode.GOOGLE_EMAIL_UNVERIFIED: (
+        403,
+        "Google cannot confirm this email address. Sign up with your email, then link Google.",
+    ),
     ErrorCode.GOOGLE_LINK_REQUIRED: (
         409,
         "An account already uses this email. Sign in to it, then link Google in settings.",

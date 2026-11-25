@@ -33,6 +33,7 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 ## What's included
 
 **Backend (`apps/api`)**
+
 - Python 3.13, FastAPI, async SQLAlchemy 2.1, psycopg 3 and PostgreSQL 16.
 - Router → Service → Repository layers in `app/modules/auth` and `app/modules/items`.
   The request session commits after the response is prepared and rolls back on errors.
@@ -58,6 +59,7 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   ([ADR 0001](docs/adr/0001-python-tooling-uv.md)).
 
 **Frontend (`apps/web`)**
+
 - Next.js 16 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
   config in `packages/config`.
 - Public pages at `/`, `/privacy`, `/terms`, and `/account-deletion`. Sign-in, registration
@@ -72,6 +74,7 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   (`lib/auth-store.ts`).
 
 **Tooling**
+
 - pnpm workspaces + Turborepo for `lint`, `typecheck`, `build`, `dev`
   ([ADR 0002](docs/adr/0002-js-monorepo-pnpm-turborepo.md)).
 - Formatting: ruff format (Python) and Prettier (`apps/web`, `packages`), both enforced
@@ -171,13 +174,15 @@ Revision `0003` (auth redesign) changes accounts:
 - It refuses to run while two users have emails that differ only by letter case; merge or
   rename those accounts first (the error message includes a query that lists them). It
   builds the case-insensitive unique index concurrently and keeps the old exact-case
-  index for one more release so previous instances keep working during a rollout.
+  index for one more release. It also refuses duplicate provider links per user; resolve
+  those before retrying.
 - It drops the Google access/refresh tokens that the removed redirect flow stored. Linked
-  Google identities are kept. Configure `GOOGLE_AUTH_ENABLED` and your client IDs, and
+  Google links on password accounts are marked unconfirmed and require recovery or
+  relinking. Configure `GOOGLE_AUTH_ENABLED` and your client IDs, and
   remove `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` and `FRONTEND_URL` (now
   `WEB_URL`); unknown variables are ignored.
-- Existing users start unverified. Their bcrypt password hashes keep working and are
-  replaced with argon2id at their next sign-in.
+- Existing users start unverified and must prove inbox ownership before signing in.
+  Their bcrypt hashes are upgraded to argon2id after successful verification or sign-in.
 - Old 7-day access tokens stop working: users sign in again. Set `JWT_SECRET_KEY` in
   staging and production before deploying.
 
@@ -185,11 +190,11 @@ Revision `0003` (auth redesign) changes accounts:
 
 Host-side commands (`make setup`, `make test`, `make lint`, `make dev`, ...) need:
 
-| Tool | Version | Notes |
-| --- | --- | --- |
-| [uv](https://docs.astral.sh/uv/) | 0.13.9 | Enforced by `required-version` in `apps/api/pyproject.toml`. uv installs Python 3.13 if needed. |
-| Node.js | 26 (LTS) | `.nvmrc` |
-| pnpm | 12.23.0 | Pinned in `package.json` `packageManager`. Node 25+ has no Corepack, so install it with `npm install -g pnpm@12.23.0`. |
+| Tool                             | Version  | Notes                                                                                                                  |
+| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| [uv](https://docs.astral.sh/uv/) | 0.13.9   | Enforced by `required-version` in `apps/api/pyproject.toml`. uv installs Python 3.13 if needed.                        |
+| Node.js                          | 26 (LTS) | `.nvmrc`                                                                                                               |
+| pnpm                             | 12.23.0  | Pinned in `package.json` `packageManager`. Node 25+ has no Corepack, so install it with `npm install -g pnpm@12.23.0`. |
 
 ```bash
 make setup                      # uv sync --locked + pnpm install --frozen-lockfile
@@ -211,37 +216,38 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 
 **API** ([`.env.example`](apps/api/.env.example))
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `ENV` | `production` | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS. |
-| `DATABASE_URL` | Local Compose Postgres in development only | Required in test, staging and production. Use the Neon pooled URL for the app. |
-| `MIGRATION_DATABASE_URL` | Falls back to `DATABASE_URL` | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`. |
-| `SECRET_KEY` | Local development fallback only | Server-side HMAC secret (IP hashes, CSRF tokens, rate-limit and audit identifiers). Set a unique secret of at least 32 characters in test, staging and production; the repository's published keys are rejected, even with surrounding whitespace. Rotating it signs web sessions out (their CSRF tokens change). |
-| `JWT_SECRET_KEY` | Derived from `SECRET_KEY` in development and test | Access-token signing key. Required in staging and production: unique, different from `SECRET_KEY`, and at least 32/48/64 bytes for HS256/HS384/HS512. Rotating it makes clients refresh once. |
-| `JWT_ALGORITHM` | `HS256` | `HS256`, `HS384` or `HS512`. |
-| `JWT_ISSUER` / `JWT_AUDIENCE` | `boilerplate-api` | `iss`/`aud` claims, checked on every request. |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access-token lifetime, 1 to 60 minutes. |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Idle timeout: each refresh extends the session by this much. |
-| `SESSION_MAX_AGE_DAYS` | `90` | Absolute session lifetime; then the user signs in again. |
-| `REAUTHENTICATION_MAX_AGE_MINUTES` | `10` | How recent a sign-in or re-authentication on the session must be for account deletion, email changes and Google (un)linking. |
-| `EMAIL_TOKEN_EXPIRE_HOURS` | `24` | Lifetime of email verification and email-change links. |
-| `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Lifetime of password reset links. |
-| `PASSWORD_BREACH_CHECK` | `false` | Reject new passwords found in Have I Been Pwned (k-anonymity range API; fails open). |
-| `APP_NAME` | `Boilerplate App` | Product name in emails. |
-| `WEB_URL` | `http://localhost:3000` | Base URL of the web app for emailed links. Staging and production require `https`. |
-| `GOOGLE_AUTH_ENABLED` | `false` | Enables `POST /v1/auth/google`. Requires at least one client ID below. |
-| `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed. |
-| `EMAIL_BACKEND` | `console` | `console` (prints messages and links; development), `smtp`, or `memory` (tests). Staging and production require `smtp`. Compose uses `smtp` with Mailpit. |
-| `EMAIL_FROM` | `Boilerplate App <no-reply@localhost>` | Sender address. |
-| `SMTP_HOST` / `SMTP_PORT` | `localhost` / `1025` | SMTP server. |
-| `SMTP_SECURITY` | `none` | `none`, `starttls`, or `tls` (implicit TLS). |
-| `SMTP_USERNAME` / `SMTP_PASSWORD` | Unset | Set both or neither. |
-| `SMTP_TIMEOUT_SECONDS` | `10` | SMTP connection timeout. |
-| `RATE_LIMIT_BACKEND` | `postgres` | `postgres`, or `memory` (per process; development and test only). |
-| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh. |
-| `TRUSTED_HOSTS` | `["localhost","127.0.0.1","[::1]"]` | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host. |
-| `MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum HTTP body size in bytes, including chunked requests. |
-| `HEALTHCHECK_URL` | `http://127.0.0.1:8000/health` | Optional override for the container probe, which reads the process environment. |
+| Variable                                                                     | Default                                           | Notes                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENV`                                                                        | `production`                                      | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS.                                                                                                                              |
+| `DATABASE_URL`                                                               | Local Compose Postgres in development only        | Required in test, staging and production. Use the Neon pooled URL for the app.                                                                                                                                                                                                                                    |
+| `MIGRATION_DATABASE_URL`                                                     | Falls back to `DATABASE_URL`                      | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`.                                                                                                                                                                                                              |
+| `SECRET_KEY`                                                                 | Local development fallback only                   | Server-side HMAC secret (IP hashes, CSRF tokens, rate-limit and audit identifiers). Set a unique secret of at least 32 characters in test, staging and production; the repository's published keys are rejected, even with surrounding whitespace. Rotating it signs web sessions out (their CSRF tokens change). |
+| `JWT_SECRET_KEY`                                                             | Derived from `SECRET_KEY` in development and test | Access-token signing key. Required in staging and production: unique, different from `SECRET_KEY`, and at least 32/48/64 bytes for HS256/HS384/HS512. Rotating it makes clients refresh once.                                                                                                                     |
+| `JWT_ALGORITHM`                                                              | `HS256`                                           | `HS256`, `HS384` or `HS512`.                                                                                                                                                                                                                                                                                      |
+| `JWT_ISSUER` / `JWT_AUDIENCE`                                                | `boilerplate-api`                                 | `iss`/`aud` claims, checked on every request.                                                                                                                                                                                                                                                                     |
+| `ACCESS_TOKEN_EXPIRE_MINUTES`                                                | `15`                                              | Access-token lifetime, 1 to 60 minutes.                                                                                                                                                                                                                                                                           |
+| `REFRESH_TOKEN_EXPIRE_DAYS`                                                  | `30`                                              | Idle timeout: each refresh extends the session by this much.                                                                                                                                                                                                                                                      |
+| `SESSION_MAX_AGE_DAYS`                                                       | `90`                                              | Absolute session lifetime; then the user signs in again.                                                                                                                                                                                                                                                          |
+| `REAUTHENTICATION_MAX_AGE_MINUTES`                                           | `10`                                              | How recent a sign-in or re-authentication on the session must be for account deletion, email changes and Google (un)linking.                                                                                                                                                                                      |
+| `EMAIL_TOKEN_EXPIRE_HOURS`                                                   | `24`                                              | Lifetime of email verification and email-change links.                                                                                                                                                                                                                                                            |
+| `PASSWORD_RESET_EXPIRE_MINUTES`                                              | `30`                                              | Lifetime of password reset links.                                                                                                                                                                                                                                                                                 |
+| `PASSWORD_BREACH_CHECK`                                                      | `false`                                           | Reject new passwords found in Have I Been Pwned (k-anonymity range API; fails open).                                                                                                                                                                                                                              |
+| `APP_NAME`                                                                   | `Boilerplate App`                                 | Product name in emails.                                                                                                                                                                                                                                                                                           |
+| `WEB_URL`                                                                    | `http://localhost:3000`                           | Base URL of the web app for emailed links. Staging and production require `https`.                                                                                                                                                                                                                                |
+| `GOOGLE_AUTH_ENABLED`                                                        | `false`                                           | Enables `POST /v1/auth/google`. Requires at least one client ID below.                                                                                                                                                                                                                                            |
+| `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset                                             | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed.                                                                                                                                                                                                       |
+| `EMAIL_BACKEND`                                                              | `console`                                         | `console` (prints messages and links; development), `smtp`, or `memory` (tests). Staging and production require `smtp`. Compose uses `smtp` with Mailpit.                                                                                                                                                         |
+| `EMAIL_FROM`                                                                 | `Boilerplate App <no-reply@localhost>`            | Sender address.                                                                                                                                                                                                                                                                                                   |
+| `SMTP_HOST` / `SMTP_PORT`                                                    | `localhost` / `1025`                              | SMTP server.                                                                                                                                                                                                                                                                                                      |
+| `SMTP_SECURITY`                                                              | `none`                                            | `none`, `starttls`, or `tls` (implicit TLS).                                                                                                                                                                                                                                                                      |
+| `SMTP_USERNAME` / `SMTP_PASSWORD`                                            | Unset                                             | Set both or neither.                                                                                                                                                                                                                                                                                              |
+| `SMTP_ALLOW_INSECURE`                                                        | `false`                                           | Explicitly allow an unauthenticated plaintext local relay outside development/test. Authenticated SMTP always requires TLS.                                                                                                                                                                                       |
+| `SMTP_TIMEOUT_SECONDS`                                                       | `10`                                              | SMTP connection timeout.                                                                                                                                                                                                                                                                                          |
+| `RATE_LIMIT_BACKEND`                                                         | `postgres`                                        | `postgres`, or `memory` (per process; development and test only).                                                                                                                                                                                                                                                 |
+| `CORS_ORIGINS`                                                               | `["http://localhost:3000"]`                       | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh.                        |
+| `TRUSTED_HOSTS`                                                              | `["localhost","127.0.0.1","[::1]"]`               | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host.                                                                                                                                                                                                           |
+| `MAX_REQUEST_BODY_BYTES`                                                     | `1048576`                                         | Maximum HTTP body size in bytes, including chunked requests.                                                                                                                                                                                                                                                      |
+| `HEALTHCHECK_URL`                                                            | `http://127.0.0.1:8000/health`                    | Optional override for the container probe, which reads the process environment.                                                                                                                                                                                                                                   |
 
 Behind a reverse proxy, run uvicorn with `--forwarded-allow-ips` set to the proxy's
 addresses so per-IP rate limits and IP hashes see the client address, not the proxy's.
@@ -249,22 +255,25 @@ addresses so per-IP rate limits and IP hashes see the client address, not the pr
 Run the Alembic upgrade with the direct connection before starting new API
 instances. `/ready` returns 503 if the DB is unreachable, unmigrated or behind the
 image. Unknown revisions are treated as newer; the API logs their IDs once per distinct
-set per process. During a rolling
-release, keep migrations compatible with instances of the previous release. See [ADR 0004](docs/adr/0004-async-postgres.md).
+set per process. Migration 0003 requires a coordinated cutover: stop old API instances,
+apply the migration, then start the new release. It drops columns old instances read and
+invalidates old access tokens. Resolve duplicate case-insensitive emails and duplicate
+provider links before migrating; the preflight error identifies the required cleanup.
+See [ADR 0004](docs/adr/0004-async-postgres.md).
 
 **Web** ([`.env.example`](apps/web/.env.example))
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
-| `WEB_LEGAL_APP_NAME` | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates. |
-| `WEB_LEGAL_DOMAIN` | `[Site domain]` placeholder | Domain shown in the privacy and terms templates. |
-| `WEB_SUPPORT_EMAIL` | Unset | Monitored mailbox for deletion requests sent from `/account-deletion`. |
-| `ANDROID_PACKAGE_NAME` | Unset | Android application ID, for example `com.example.app`. |
-| `ANDROID_SHA256_CERT_FINGERPRINTS` | Unset | Comma-separated, colon-delimited SHA-256 signing certificate fingerprints. Include the Play App Signing certificate for Play builds. |
-| `IOS_TEAM_ID` | Unset | 10-character Apple Developer Team ID. |
-| `IOS_BUNDLE_ID` | Unset | iOS bundle identifier, for example `com.example.app`. |
-| `IOS_APPLINK_PATHS` | `/app/*` | Comma-separated URL paths beginning with `/`. Supports `*` for any number of characters and `?` for one character. Include the email-verification, password-reset and invite paths that the mobile app handles. The root path and any pattern matching `/privacy`, `/terms` or `/account-deletion` are rejected. |
+| Variable                           | Default                                                                   | Notes                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`              | `http://localhost:8000`                                                   | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image.                                                                       |
+| `WEB_LEGAL_APP_NAME`               | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates.                                                                                                                                                                                                                 |
+| `WEB_LEGAL_DOMAIN`                 | `[Site domain]` placeholder                                               | Domain shown in the privacy and terms templates.                                                                                                                                                                                                                                                                 |
+| `WEB_SUPPORT_EMAIL`                | Unset                                                                     | Monitored mailbox for deletion requests sent from `/account-deletion`.                                                                                                                                                                                                                                           |
+| `ANDROID_PACKAGE_NAME`             | Unset                                                                     | Android application ID, for example `com.example.app`.                                                                                                                                                                                                                                                           |
+| `ANDROID_SHA256_CERT_FINGERPRINTS` | Unset                                                                     | Comma-separated, colon-delimited SHA-256 signing certificate fingerprints. Include the Play App Signing certificate for Play builds.                                                                                                                                                                             |
+| `IOS_TEAM_ID`                      | Unset                                                                     | 10-character Apple Developer Team ID.                                                                                                                                                                                                                                                                            |
+| `IOS_BUNDLE_ID`                    | Unset                                                                     | iOS bundle identifier, for example `com.example.app`.                                                                                                                                                                                                                                                            |
+| `IOS_APPLINK_PATHS`                | `/app/*`                                                                  | Comma-separated URL paths beginning with `/`. Supports `*` for any number of characters and `?` for one character. Include the email-verification, password-reset and invite paths that the mobile app handles. The root path and any pattern matching `/privacy`, `/terms` or `/account-deletion` are rejected. |
 
 Host development and `make up` both read the legal, support and association
 settings from the optional `apps/web/.env.local` at **runtime**. After changing
@@ -316,27 +325,27 @@ web and mobile transport), [ADR 0007](docs/adr/0007-google-id-token-sign-in.md) 
 sign-in and account linking) and [ADR 0008](docs/adr/0008-rate-limits-email-audit.md)
 (rate limits, email delivery, audit log, enumeration resistance).
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /v1/auth/register` | Create an account and email a verification link. Always `202` with the same body. |
-| `POST /v1/auth/login` | Email and password sign-in. Returns tokens (below). |
-| `POST /v1/auth/google` | Sign in or sign up with a Google ID token `{id_token}`. |
-| `POST /v1/auth/refresh` | Exchange a refresh token for new tokens (rotation). |
-| `POST /v1/auth/logout` | Revoke the current session. |
-| `POST /v1/auth/verify-email` | Confirm an email address with the emailed token. |
-| `POST /v1/auth/verify-email/resend` | Send a new verification link (signed in). |
-| `POST /v1/auth/password/forgot` | Email a reset link. Always `202` with the same body. |
-| `POST /v1/auth/password/reset` | Set a new password with the emailed token; signs out every session. |
-| `POST /v1/auth/email/confirm` | Confirm a new email address with the emailed token. |
-| `POST /v1/auth/reauthenticate` | Confirm the user with `{password}` or a Google `{id_token}` issued in the last few minutes. |
-| `POST`/`DELETE /v1/auth/google/link` | Link or unlink Google for the signed-in user (recent re-authentication required). |
-| `GET /v1/auth/sessions` | The user's active sessions (devices), the current one marked. |
-| `DELETE /v1/auth/sessions/{session_id}` | Revoke one session. |
-| `POST /v1/auth/sessions/revoke-others` | Revoke every session except the current one. |
-| `GET`/`PATCH /v1/me` | Read or update the profile. |
-| `POST /v1/me/password` | Change the password (current password required); signs out other sessions. |
-| `POST /v1/me/email` | Request an email change; the address changes once the new one is confirmed. |
-| `DELETE /v1/me` | Delete the account (recent re-authentication required). |
+| Endpoint                                | Purpose                                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `POST /v1/auth/register`                | Create an account and email a verification link. Always `202` with the same body.           |
+| `POST /v1/auth/login`                   | Email and password sign-in. Returns tokens (below).                                         |
+| `POST /v1/auth/google`                  | Sign in or sign up with a Google ID token `{id_token}`.                                     |
+| `POST /v1/auth/refresh`                 | Exchange a refresh token for new tokens (rotation).                                         |
+| `POST /v1/auth/logout`                  | Revoke the current session.                                                                 |
+| `POST /v1/auth/verify-email`            | Confirm an email address with the emailed token.                                            |
+| `POST /v1/auth/verify-email/resend`     | Request a new verification link by email.                                                   |
+| `POST /v1/auth/password/forgot`         | Email a reset link. Always `202` with the same body.                                        |
+| `POST /v1/auth/password/reset`          | Set a new password with the emailed token; signs out every session.                         |
+| `POST /v1/auth/email/confirm`           | Confirm a new email address with the emailed token.                                         |
+| `POST /v1/auth/reauthenticate`          | Confirm the user with `{password}` or a Google `{id_token}` issued in the last few minutes. |
+| `POST`/`DELETE /v1/auth/google/link`    | Link or unlink Google for the signed-in user (recent re-authentication required).           |
+| `GET /v1/auth/sessions`                 | The user's active sessions (devices), the current one marked.                               |
+| `DELETE /v1/auth/sessions/{session_id}` | Revoke one session.                                                                         |
+| `POST /v1/auth/sessions/revoke-others`  | Revoke every session except the current one.                                                |
+| `GET`/`PATCH /v1/me`                    | Read or update the profile.                                                                 |
+| `POST /v1/me/password`                  | Change the password (current password required); signs out other sessions.                  |
+| `POST /v1/me/email`                     | Request an email change; the address changes once the new one is confirmed.                 |
+| `DELETE /v1/me`                         | Delete the account (recent re-authentication required).                                     |
 
 **Tokens.** Access tokens are HMAC-signed JWTs (HS256 by default; `typ: at+jwt`; `iss`,
 `aud`, `sub`, `sid`, `iat`, `exp`, `jti`) valid for 15 minutes, with 30 seconds of
@@ -363,22 +372,22 @@ store it in secure storage.
 
 **Passwords** are 12 to 128 characters for new passwords, hashed with argon2id
 (19 MiB, 2 iterations, 1 lane). Hashes from the previous release (bcrypt) are verified
-and upgraded at sign-in. The breached-password check is optional and off by default.
+and upgraded at sign-in. Submitted passwords are capped at 1,024 characters; users
+with longer legacy passwords must use password reset. The breached-password check is
+optional and off by default.
 
-**Email verification.** Users can sign in before verifying. A verified email is required
-for automatic Google linking. Emailed links put the token in the URL fragment
-(`#token=`), so it is not sent to web servers or in `Referer` headers. Until the web pages
-exist, take the token from the email (Mailpit locally) and post it to the endpoint above.
+**Email verification.** Password sign-in requires a verified address. Registration
+sends a link tied to the chosen password; the recipient enters that password to verify.
+A new registration for an unverified address replaces the pending credential and link.
+Claiming an unverified account revokes earlier sessions and removes untrusted links and
+tokens. Links put tokens in the URL fragment (`#token=`), so servers do not receive them.
 
-**Google.** `POST /v1/auth/google` accepts ID tokens from Google Identity Services (web)
-or native sign-in on Android and iOS. google-auth checks the signature, issuer, expiry
-and that the audience is one of the configured client IDs. The API never requests or
-stores Google access or refresh tokens. Linking: a known Google identity signs in to its
-account. Otherwise Google must report the email as verified; a new email creates an
-account, and an existing account is linked automatically only if its email is verified.
-If not, the response is `409 google_link_required`: sign in to that account (or reset its
-password, which proves control of the inbox) and link Google explicitly. Unlinking
-requires another sign-in method.
+**Google.** `POST /v1/auth/google` verifies Google ID tokens. Automatic linking and
+mailbox verification require an authoritative Google address (Gmail or a matching
+Workspace hosted domain); third-party addresses require local verification or explicit
+linking from an authenticated account. Legacy links on password accounts require recovery
+or explicit relinking. Unlinking revokes sessions established through that identity and
+prevents automatic relinking.
 
 **Account deletion.** `DELETE /v1/me` needs a sign-in or `POST /v1/auth/reauthenticate`
 on the same session within `REAUTHENTICATION_MAX_AGE_MINUTES`. It runs the registered
@@ -391,15 +400,15 @@ with the user ID but without email addresses or names.
 **Rate limits** return `429` with `Retry-After` and the error envelope (`rate_limited`,
 `details.retry_after`). Identifiers are stored as HMAC digests.
 
-| Action | Per IP | Per account |
-| --- | --- | --- |
-| Sign-in | 50 / 15 min | 20 / 15 min, plus a lockout after 5 consecutive failures: 30 s, doubling to 15 min |
-| Registration | 10 / hour | 3 / hour per email |
-| Google sign-in | 50 / 15 min | 20 / 15 min per Google account |
-| Password reset request | 10 / hour | 3 / hour per email |
-| Verification resend | 10 / hour | 3 / hour |
-| Email change request | | 3 / hour |
-| Re-authentication and password change | | 10 / 15 min, plus the failure lockout |
+| Action                                | Per IP      | Per account                                                                        |
+| ------------------------------------- | ----------- | ---------------------------------------------------------------------------------- |
+| Sign-in                               | 50 / 15 min | 20 / 15 min, plus a lockout after 5 consecutive failures: 30 s, doubling to 15 min |
+| Registration                          | 10 / hour   | 3 / hour per email                                                                 |
+| Google sign-in                        | 50 / 15 min | 20 / 15 min per Google account                                                     |
+| Password reset request                | 10 / hour   | 3 / hour per email                                                                 |
+| Verification resend                   | 10 / hour   | 3 / hour                                                                           |
+| Email change request                  |             | 3 / hour                                                                           |
+| Re-authentication and password change |             | 10 / 15 min, plus the failure lockout                                              |
 
 **Enumeration.** Registration and reset requests answer the same way for every address,
 and sign-in failures share one error (accounts without a password are checked against a
@@ -424,8 +433,7 @@ optional `Idempotency-Key` of up to 128 visible ASCII characters. Retry with the
 same user, key, method, path, query string, media type and identical body bytes.
 `Content-Type` parameters such as `charset` are ignored. Preserve the serialized JSON,
 including whitespace and property order. A retry replays the committed status and
-response body for up to 24 hours. Reusing the key for a different request returns
-422. An overlapping request with the same user and key returns 409. Failed transactions leave the key available for retry.
+response body for up to 24 hours. Reusing the key for a different request returns 422. An overlapping request with the same user and key returns 409. Failed transactions leave the key available for retry.
 Expired records can be reused. Periodic cleanup is part of the future jobs phase.
 
 Errors return `{"error": {"code": "...", "message": "...", "details": {}}}`.

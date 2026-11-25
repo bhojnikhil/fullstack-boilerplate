@@ -57,7 +57,7 @@ else:
 with urlopen(f"http://mailpit:8025/api/v1/message/{messages[0]['ID']}", timeout=2) as r:
     text = json.load(r)["Text"]
 token = re.search(r"https://web\.example\.com/auth/verify-email#token=([\w-]+)", text).group(1)
-assert call("/v1/auth/verify-email", {"token": token})[0] == 204
+assert call("/v1/auth/verify-email", {"token": token, "password": password})[0] == 204
 
 status, headers, body = call(
     "/v1/auth/login",

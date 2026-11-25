@@ -10,7 +10,7 @@ request's transaction, before the user row is deleted:
 
 Phase 5 (workspaces) registers a hook that blocks deletion while the user is the
 sole owner of a workspace with other members, and deletes the user's solo
-workspaces. Register hooks in ``app.main.create_app``.
+workspaces. Register hooks in ``app.factory.create_app``.
 """
 
 from collections.abc import Mapping

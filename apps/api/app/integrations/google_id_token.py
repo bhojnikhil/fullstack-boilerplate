@@ -45,6 +45,23 @@ class GoogleIdentity:
     name: str | None
     picture: str | None
     issued_at: datetime
+    # The "hd" claim: the Google Workspace domain of the account, if any.
+    hosted_domain: str | None = None
+
+    @property
+    def authoritative(self) -> bool:
+        """Whether Google vouches that this person controls the address today.
+
+        Per Google's guidance, only Gmail addresses and Workspace accounts whose email
+        is in the hosted domain qualify. Any other address was verified at some point,
+        which does not prove current ownership.
+        """
+        if not self.email_verified:
+            return False
+        domain = self.email.rpartition("@")[2]
+        return domain == "gmail.com" or (
+            self.hosted_domain is not None and domain == self.hosted_domain
+        )
 
 
 class _CertsResponse(transport.Response):
@@ -98,6 +115,8 @@ class GoogleIdTokenVerifier:
             key_id = jwt.get_unverified_header(token).get("kid")
         except jwt.PyJWTError as err:
             raise GoogleTokenError from err
+        if not isinstance(key_id, str):
+            raise GoogleTokenError
         certs = await self._fetch_certs()
         now = time.monotonic()
         if key_id not in self._key_ids and now - self._forced_at >= MIN_FORCED_REFRESH_INTERVAL:
@@ -154,7 +173,7 @@ def identity_from_claims(claims: Mapping[str, Any]) -> GoogleIdentity:
         raise GoogleTokenError
     if not isinstance(issued_at, int):
         raise GoogleTokenError
-    name, picture = claims.get("name"), claims.get("picture")
+    name, picture, hosted_domain = claims.get("name"), claims.get("picture"), claims.get("hd")
     return GoogleIdentity(
         subject=subject,
         email=email.strip().lower(),
@@ -163,4 +182,5 @@ def identity_from_claims(claims: Mapping[str, Any]) -> GoogleIdentity:
         name=name[:255] if isinstance(name, str) and name.strip() else None,
         picture=picture if isinstance(picture, str) and len(picture) <= 500 else None,
         issued_at=datetime.fromtimestamp(issued_at, UTC),
+        hosted_domain=hosted_domain.strip().lower() if isinstance(hosted_domain, str) else None,
     )

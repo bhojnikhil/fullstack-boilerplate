@@ -51,7 +51,11 @@ class SessionService:
         method: SignInMethod,
         client: ClientInfo,
         device_name: str | None,
+        *,
+        authenticated_at: datetime | None = None,
     ) -> IssuedTokens:
+        """Start a session. ``authenticated_at`` is when the user actually proved who they
+        are, e.g. when Google issued the ID token; it defaults to now."""
         now = datetime.now(UTC)
         session = AuthSession(
             id=uuid.uuid4(),
@@ -61,7 +65,7 @@ class SessionService:
             device_name=device_name,
             user_agent=client.user_agent,
             ip_hash=client.ip_hash,
-            authenticated_at=now,
+            authenticated_at=min(authenticated_at or now, now),
             last_used_at=now,
             expires_at=self.expiry(now, now),
             created_at=now,

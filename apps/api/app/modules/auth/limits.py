@@ -18,7 +18,9 @@ PASSWORD_RESET_PER_IP = Rule("password_reset_ip", 10, timedelta(hours=1))
 PASSWORD_RESET_PER_ACCOUNT = Rule("password_reset_account", 3, timedelta(hours=1))
 VERIFICATION_PER_IP = Rule("verification_ip", 10, timedelta(hours=1))
 VERIFICATION_PER_ACCOUNT = Rule("verification_account", 3, timedelta(hours=1))
+EMAIL_CHANGE_PER_IP = Rule("email_change_ip", 10, timedelta(hours=1))
 EMAIL_CHANGE_PER_ACCOUNT = Rule("email_change_account", 3, timedelta(hours=1))
+REAUTH_PER_IP = Rule("reauth_ip", 50, timedelta(minutes=15))
 REAUTH_PER_ACCOUNT = Rule("reauth_account", 10, timedelta(minutes=15))
 
 # Progressive lockout scopes (see app.core.ratelimit.lockout_for).

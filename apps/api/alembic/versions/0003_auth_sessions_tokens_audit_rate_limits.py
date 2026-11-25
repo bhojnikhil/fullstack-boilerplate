@@ -6,12 +6,21 @@ Create Date: 2026-11-24 15:23:43.411883
 
 - Adds device sessions with refresh-token rotation, single-use emailed tokens,
   the audit log and Postgres-backed rate-limit windows.
-- Adds users.email_verified_at (existing users start unverified).
-- Adds a case-insensitive unique index on users.email, built concurrently. It fails
-  if two existing accounts differ only by letter case; resolve those first. The
-  exact-case ix_users_email stays until a later release (expand/contract).
+- Adds users.email_verified_at. Existing users start unverified and cannot sign in
+  with a password until they prove they own the address (verification link or reset).
+- Adds a case-insensitive unique index on users.email, built concurrently. The
+  exact-case ix_users_email stays for now.
 - Drops the Google access/refresh tokens and their expiry from oauth_accounts
   (stored in plaintext by the removed redirect flow). They cannot be restored.
+- Allows one Google identity per user, and records each link's state. Links that the
+  removed flow attached to password accounts by matching emails become "unconfirmed":
+  the two credentials may belong to different people, so the link is not usable until
+  Google or the inbox proves ownership again.
+
+Before any DDL, the upgrade stops with instructions if two accounts differ only by
+letter case or a user has more than one Google identity. This release drops columns
+the previous one reads and does not accept its tokens: stop the old API before
+migrating (a coordinated cutover, not a rolling deploy).
 """
 
 import sqlalchemy as sa
@@ -28,6 +37,7 @@ depends_on = None
 
 def upgrade() -> None:
     require_case_insensitive_unique_emails()
+    require_one_identity_per_provider()
     # Non-transactional step first, as in 0002: a failed concurrent build can leave an
     # invalid index, which the drop below removes when the upgrade is retried.
     with op.get_context().autocommit_block():
@@ -43,6 +53,17 @@ def upgrade() -> None:
     op.add_column("users", sa.Column("email_verified_at", sa.DateTime(timezone=True)))
     op.create_unique_constraint(
         "uq_oauth_accounts_user_id_provider", "oauth_accounts", ["user_id", "provider"]
+    )
+    op.add_column(
+        "oauth_accounts",
+        sa.Column("state", sa.String(length=16), nullable=False, server_default="linked"),
+    )
+    op.alter_column("oauth_accounts", "state", server_default=None)
+    # The removed flow linked Google to any account with the same email. On accounts
+    # that also have a password, the two may belong to different people.
+    op.execute(
+        "UPDATE oauth_accounts SET state = 'unconfirmed' WHERE user_id IN "
+        "(SELECT id FROM users WHERE hashed_password IS NOT NULL)"
     )
     op.drop_column("oauth_accounts", "access_token")
     op.drop_column("oauth_accounts", "refresh_token")
@@ -108,6 +129,7 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(length=32), nullable=False),
         sa.Column("token_hash", sa.String(length=64), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),
+        sa.Column("password_hash", sa.String(length=255), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "created_at",
@@ -187,6 +209,7 @@ def downgrade() -> None:
     op.add_column(
         "oauth_accounts", sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True)
     )
+    op.drop_column("oauth_accounts", "state")
     op.drop_constraint("uq_oauth_accounts_user_id_provider", "oauth_accounts", type_="unique")
     op.drop_column("users", "email_verified_at")
 
@@ -195,6 +218,24 @@ def drop_email_lower_index() -> None:
     op.drop_index(
         "ux_users_email_lower", table_name="users", if_exists=True, postgresql_concurrently=True
     )
+
+
+def require_one_identity_per_provider() -> None:
+    if op.get_context().as_sql:
+        return
+    duplicated = op.get_bind().scalar(
+        sa.text(
+            "SELECT count(*) FROM (SELECT 1 FROM oauth_accounts GROUP BY user_id, provider "
+            "HAVING count(*) > 1) AS duplicated"
+        )
+    )
+    if duplicated:
+        raise RuntimeError(
+            f"{duplicated} user(s) have more than one linked identity from the same provider. "
+            "Keep one link per user and provider (delete the others), then rerun the "
+            "migration. List them with: SELECT user_id, provider, count(*) FROM "
+            "oauth_accounts GROUP BY 1, 2 HAVING count(*) > 1"
+        )
 
 
 def require_case_insensitive_unique_emails() -> None:

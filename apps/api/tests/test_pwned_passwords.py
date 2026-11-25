@@ -91,7 +91,7 @@ async def test_password_changes_reject_breached_passwords(
 
 
 def test_disabled_by_default(app, config, session_factory):
-    from app.main import create_app
+    from app.factory import create_app
 
     assert config.password_breach_check is False
     assert app.state.breach_checker is None

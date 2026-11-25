@@ -17,22 +17,15 @@ unknown key ID triggers one early refetch at most once a minute, and the last go
 certificates keep working during an outage. No redirect, callback, client secret or
 Google access/refresh token is involved, and the stored token columns were dropped.
 
-**Linking rules.**
-
-1. A Google subject that is already linked signs in to its account.
-2. Otherwise Google must mark the email as verified, or nothing is created or linked.
-3. A new email creates a verified account linked to the Google subject.
-4. An existing account is linked automatically only if its own email is verified.
-   Otherwise the response is `409 google_link_required`. The person signs in to that
-   account and links Google explicitly, or resets its password first: the reset link
-   proves control of the inbox, verifies the email and signs out every session,
-   including an attacker's.
-
-Explicit linking (`POST /v1/auth/google/link`) needs recent re-authentication, since a
-stolen access token must not be able to add a permanent way in. One Google identity per
-user. Unlinking also needs recent re-authentication and another sign-in method.
-`POST /v1/auth/reauthenticate` accepts a Google ID token only if it belongs to the user's
-linked identity and was issued within the re-authentication window.
+**Linking rules.** A linked Google subject can sign in unless its link is unconfirmed
+or removed. Automatic linking to a verified local account requires an authoritative
+Google address: Gmail or a Workspace hosted domain matching the email domain. A third-party address cannot create an account or auto-link an existing one; link
+explicitly after local sign-in.
+Legacy links on password accounts are unconfirmed until recovery or explicit relinking.
+Unlinking revokes sessions created through that identity and blocks automatic relinking.
+Explicit linking and unlinking require recent authentication, and unlinking requires
+another sign-in method. Google authentication time is taken from the ID token's `iat`,
+including for reauthentication.
 
 **Sign in with Apple** (required on iOS when other social sign-ins are offered) is not
 implemented. It would follow the same shape: a verifier in `app/integrations` for Apple's

@@ -92,9 +92,9 @@ Conventions added with the auth redesign:
   `ENV=development`, sends email to Mailpit and publishes every port only on IPv4 loopback.
 - The container probes `/health` for liveness. Both probes bypass the host allowlist.
   `/ready` rejects an unreachable, unmigrated or behind database. An unknown revision is
-  accepted with a warning that names the unknown IDs once per set per process to support
-  rolling deploys. Run Alembic using the direct
-  connection when the application uses a pooler.
+  accepted with a warning that names the unknown IDs once per set per process. Migration
+  0003 requires a coordinated cutover: stop old API instances before migrating. Run
+  Alembic using the direct connection when the application uses a pooler.
 
 ## Development and checks
 

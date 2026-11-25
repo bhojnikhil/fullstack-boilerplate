@@ -27,6 +27,7 @@ from app.modules.auth.cookies import (
     set_session_cookies,
     verify_csrf,
 )
+from app.modules.auth.deferred import DeferredWork
 from app.modules.auth.deletion import AccountDeletionHook, get_account_deletion_hooks
 from app.modules.auth.dependencies import Auth, Mutation
 from app.modules.auth.google import GoogleService
@@ -50,6 +51,7 @@ from app.modules.auth.schemas import (
     TokenResponse,
     UpdateProfileRequest,
     UserResponse,
+    VerifyEmailRequest,
 )
 from app.modules.auth.service import AuthService, PasswordPolicy
 from app.modules.auth.sessions import IssuedTokens
@@ -72,9 +74,10 @@ async def get_auth_service(
     mailer: Mail,
     limiter: Limiter,
     client: Client,
+    deferred: DeferredWork,
 ) -> AuthService:
     policy = PasswordPolicy(request.app.state.breach_checker)
-    return AuthService(db, config, mailer, limiter, client, policy)
+    return AuthService(db, config, mailer, limiter, client, policy, deferred)
 
 
 Authentication = Annotated[AuthService, Depends(get_auth_service)]
@@ -128,10 +131,11 @@ ACCEPTED_MESSAGE = "If the address can be used, we sent an email to it. Follow i
 
 @router.post("/register", status_code=status.HTTP_202_ACCEPTED, responses=errors(422, 429))
 async def register(data: RegisterRequest, service: Authentication) -> AcceptedResponse:
-    """Create an account and email a verification link.
+    """Start registration: email a link that activates the chosen password.
 
-    The response is the same whether or not the email is registered. Existing
-    owners get an email instead. Sign in with ``/login`` afterwards.
+    The response is the same whether or not the email is registered (existing owners
+    get a notice instead), and the account work happens after the response. The
+    account can sign in once the link is opened with the same password.
     """
     await service.register(data)
     return AcceptedResponse(message=ACCEPTED_MESSAGE)
@@ -207,18 +211,18 @@ async def logout(response: Response, context: Auth, service: Authentication) -> 
     clear_session_cookies(response, service.config)
 
 
-@router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT, responses=errors(400))
-async def verify_email(data: TokenRequest, service: Authentication) -> None:
-    await service.verify_email(data.token)
-
-
 @router.post(
-    "/verify-email/resend",
-    status_code=status.HTTP_202_ACCEPTED,
-    responses=errors(401, 403, 429),
+    "/verify-email", status_code=status.HTTP_204_NO_CONTENT, responses=errors(400, 401, 429)
 )
-async def resend_verification(context: Auth, service: Authentication) -> AcceptedResponse:
-    await service.resend_verification(context.user)
+async def verify_email(data: VerifyEmailRequest, service: Authentication) -> None:
+    """Confirm the address with the emailed token and the password chosen at registration."""
+    await service.verify_email(data)
+
+
+@router.post("/verify-email/resend", status_code=status.HTTP_202_ACCEPTED, responses=errors(429))
+async def resend_verification(data: EmailRequest, service: Authentication) -> AcceptedResponse:
+    """Email a new verification link. The response does not reveal whether one was sent."""
+    await service.resend_verification(data.email)
     return AcceptedResponse(message=ACCEPTED_MESSAGE)
 
 
@@ -268,8 +272,10 @@ async def link_google(data: GoogleLinkRequest, context: Auth, google: Google) ->
 @router.delete(
     "/google/link", status_code=status.HTTP_204_NO_CONTENT, responses=errors(401, 403, 404, 409)
 )
-async def unlink_google(context: Auth, google: Google) -> None:
-    await google.unlink(context)
+async def unlink_google(response: Response, context: Auth, google: Google, config: Config) -> None:
+    """Unlink Google; sessions started with Google (possibly this one) are signed out."""
+    if await google.unlink(context):
+        clear_session_cookies(response, config)
 
 
 @router.get("/sessions", responses=errors(401, 403))

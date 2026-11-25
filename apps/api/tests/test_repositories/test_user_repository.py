@@ -16,8 +16,9 @@ def user_repo(test_db: AsyncSession) -> UserRepository:
 
 
 async def test_create_and_get_user(user_repo: UserRepository):
-    user = await user_repo.create("new@example.com", "New User", hashed_password="hash")
+    user = await user_repo.create("new@example.com", "New User")
     assert user is not None
+    assert user.hashed_password is None  # Passwords are only set once verified.
     assert user.email == "new@example.com"
     assert user.is_active is True
     assert user.email_verified is False

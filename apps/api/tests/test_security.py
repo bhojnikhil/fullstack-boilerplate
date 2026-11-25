@@ -62,7 +62,7 @@ def test_access_token_round_trip(config):
         lambda c: forge(c, exp=int(time.time()) - 31, iat=int(time.time()) - 931),
         lambda c: forge(c, iat=int(time.time()) + 3600),
         lambda c: forge(c, key="another-key-that-is-long-enough-for-hs256!"),
-        lambda c: forge(c, algorithm="HS512", key=c.jwt_key * 2),  # Algorithm confusion.
+        lambda c: forge(c, algorithm="HS512"),  # Right key, algorithm not allowed.
         lambda c: forge(c, sid=None),
         lambda c: forge(c, jti=None),
         lambda c: forge(c, sub="not-a-uuid"),

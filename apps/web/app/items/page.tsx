@@ -94,8 +94,11 @@ export default function ItemsPage() {
           <Button
             variant="secondary"
             onClick={async () => {
-              await useAuthStore.getState().logout();
-              router.push("/");
+              try {
+                await useAuthStore.getState().logout();
+              } finally {
+                router.push("/");
+              }
             }}
           >
             Logout

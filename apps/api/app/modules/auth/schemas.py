@@ -86,6 +86,17 @@ class TokenRequest(Strict):
     token: OpaqueToken
 
 
+class VerifyEmailRequest(Strict):
+    """The emailed token plus the password chosen at registration.
+
+    Requiring the password means opening a link from someone else's registration
+    cannot activate their password on your address.
+    """
+
+    token: OpaqueToken
+    password: SubmittedPassword
+
+
 class EmailRequest(Strict):
     email: Email
 
