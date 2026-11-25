@@ -59,7 +59,14 @@ describe("generated Android manifest (production)", () => {
     const granted = (manifest["uses-permission"] ?? [])
       .filter((p) => p.$["tools:node"] !== "remove")
       .map((p) => p.$["android:name"]);
-    expect(granted).toEqual(["android.permission.INTERNET"]);
+    // INTERNET, plus the two expo-local-authentication (biometric app lock)
+    // adds in the config. Permissions that libraries merge in at build time
+    // (e.g. POST_NOTIFICATIONS from expo-notifications) aren't visible here.
+    expect(granted).toEqual([
+      "android.permission.INTERNET",
+      "android.permission.USE_BIOMETRIC",
+      "android.permission.USE_FINGERPRINT",
+    ]);
   });
 
   it("keeps predictive back off", () => {

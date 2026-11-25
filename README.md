@@ -52,7 +52,7 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   receipts (15 min) and purge expired sessions, refresh tokens, emailed tokens, idempotency
   records, rate-limit rows and old dead jobs (hourly).
 - Push ([ADR 0012](docs/adr/0012-push-storage-version-gate-sentry.md)): `POST`/`DELETE
-  /v1/devices` register and remove Expo push tokens; jobs send through the Expo Push API
+/v1/devices` register and remove Expo push tokens; jobs send through the Expo Push API
   and prune tokens that receipts report as `DeviceNotRegistered`.
 - S3-compatible storage interface (S3, R2, MinIO) with presigned upload/download URLs and
   type/size limits. No endpoint uses it yet.
@@ -88,12 +88,15 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   tabs where the Web Locks API exists), and sends `X-Platform: web`. Zustand auth store
   (`lib/auth-store.ts`).
 
-**Mobile (`apps/mobile`)**: foundation only; see [Mobile](#mobile). It does not call
-the API yet: no sign-in, no data.
+**Mobile (`apps/mobile`)**: see [Mobile](#mobile). Sign-in and sign-up with email
+verification, email-link screens, native Google sign-in (development build), items with an
+offline write queue, sessions, profile, account deletion, biometric lock and push
+registration. Workspace, members and invitation screens are written against an **assumed**
+API contract because phase 5 is not merged yet (see below).
 
 - Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
   `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
-  placeholder screens (sign in, sign up, items, settings) in a tab layout.
+  screens for auth, items, workspaces and settings.
 - Styling with React Native `StyleSheet` and typed light/dark design tokens
   ([ADR 0006](docs/adr/0006-mobile-styling.md)).
 - `app.config.ts` driven by environment variables, `eas.json` build profiles and EAS
@@ -250,50 +253,50 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 
 **API** ([`.env.example`](apps/api/.env.example))
 
-| Variable                                                                     | Default                                           | Notes                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENV`                                                                        | `production`                                      | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS.                                                                                                                              |
-| `DATABASE_URL`                                                               | Local Compose Postgres in development only        | Required in test, staging and production. Use the Neon pooled URL for the app.                                                                                                                                                                                                                                    |
-| `MIGRATION_DATABASE_URL`                                                     | Falls back to `DATABASE_URL`                      | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`.                                                                                                                                                                                                              |
-| `SECRET_KEY`                                                                 | Local development fallback only                   | Server-side HMAC secret (IP hashes, CSRF tokens, rate-limit and audit identifiers). Set a unique secret of at least 32 characters in test, staging and production; the repository's published keys are rejected, even with surrounding whitespace. Rotating it signs web sessions out (their CSRF tokens change). |
-| `JWT_SECRET_KEY`                                                             | Derived from `SECRET_KEY` in development and test | Access-token signing key. Required in staging and production: unique, different from `SECRET_KEY`, and at least 32/48/64 bytes for HS256/HS384/HS512. Rotating it makes clients refresh once.                                                                                                                     |
-| `JWT_ALGORITHM`                                                              | `HS256`                                           | `HS256`, `HS384` or `HS512`.                                                                                                                                                                                                                                                                                      |
-| `JWT_ISSUER` / `JWT_AUDIENCE`                                                | `boilerplate-api`                                 | `iss`/`aud` claims, checked on every request.                                                                                                                                                                                                                                                                     |
-| `ACCESS_TOKEN_EXPIRE_MINUTES`                                                | `15`                                              | Access-token lifetime, 1 to 60 minutes.                                                                                                                                                                                                                                                                           |
-| `REFRESH_TOKEN_EXPIRE_DAYS`                                                  | `30`                                              | Idle timeout: each refresh extends the session by this much.                                                                                                                                                                                                                                                      |
-| `SESSION_MAX_AGE_DAYS`                                                       | `90`                                              | Absolute session lifetime; then the user signs in again.                                                                                                                                                                                                                                                          |
-| `REAUTHENTICATION_MAX_AGE_MINUTES`                                           | `10`                                              | How recent a sign-in or re-authentication on the session must be for account deletion, email changes and Google (un)linking.                                                                                                                                                                                      |
-| `EMAIL_TOKEN_EXPIRE_HOURS`                                                   | `24`                                              | Lifetime of email verification and email-change links.                                                                                                                                                                                                                                                            |
-| `PASSWORD_RESET_EXPIRE_MINUTES`                                              | `30`                                              | Lifetime of password reset links.                                                                                                                                                                                                                                                                                 |
-| `PASSWORD_BREACH_CHECK`                                                      | `false`                                           | Reject new passwords found in Have I Been Pwned (k-anonymity range API; fails open).                                                                                                                                                                                                                              |
-| `APP_NAME`                                                                   | `Boilerplate App`                                 | Product name in emails.                                                                                                                                                                                                                                                                                           |
-| `WEB_URL`                                                                    | `http://localhost:3000`                           | Base URL of the web app for emailed links. Staging and production require `https`.                                                                                                                                                                                                                                |
-| `GOOGLE_AUTH_ENABLED`                                                        | `false`                                           | Enables `POST /v1/auth/google`. Requires at least one client ID below.                                                                                                                                                                                                                                            |
-| `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset                                             | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed.                                                                                                                                                                                                       |
-| `EMAIL_BACKEND` | `console` | `console` (prints messages and links; development), `smtp`, `resend`, or `memory` (tests). Staging and production require `smtp` or `resend`. Compose uses `smtp` with Mailpit. |
-| `EMAIL_FROM`                                                                 | `Boilerplate App <no-reply@localhost>`            | Sender address.                                                                                                                                                                                                                                                                                                   |
-| `SMTP_HOST` / `SMTP_PORT`                                                    | `localhost` / `1025`                              | SMTP server.                                                                                                                                                                                                                                                                                                      |
-| `SMTP_SECURITY`                                                              | `none`                                            | `none`, `starttls`, or `tls` (implicit TLS).                                                                                                                                                                                                                                                                      |
-| `SMTP_USERNAME` / `SMTP_PASSWORD`                                            | Unset                                             | Set both or neither.                                                                                                                                                                                                                                                                                              |
-| `SMTP_ALLOW_INSECURE`                                                        | `false`                                           | Explicitly allow an unauthenticated plaintext local relay outside development/test. Authenticated SMTP always requires TLS.                                                                                                                                                                                       |
-| `SMTP_TIMEOUT_SECONDS`                                                       | `10`                                              | SMTP connection timeout.                                                                                                                                                                                                                                                                                          |
-| `RESEND_API_KEY` / `RESEND_TIMEOUT_SECONDS` | Unset / `10` | Required with `EMAIL_BACKEND=resend`. The job id is sent as the `Idempotency-Key`. |
-| `WORKER_CONCURRENCY` / `JOB_POLL_INTERVAL_SECONDS` | `4` / `2` | Jobs the worker runs at once, and how often an idle runner polls. |
-| `JOB_TIMEOUT_SECONDS` / `JOB_LOCK_TIMEOUT_SECONDS` | `120` / `300` | A handler is cancelled after the first; a claim older than the second is treated as lost and the job runs again. The first must be shorter. |
-| `PUSH_BACKEND` | `log` | `expo` (sends through the Expo Push API), `log` (logs counts only) or `memory` (tests). |
-| `EXPO_ACCESS_TOKEN` / `EXPO_PUSH_TIMEOUT_SECONDS` | Unset / `10` | Optional Expo access token (needed if the Expo project enforces enhanced push security). |
-| `STORAGE_BACKEND` | `disabled` | `s3` (S3, R2, MinIO), `memory` (tests) or `disabled`. |
-| `STORAGE_ENDPOINT_URL` / `STORAGE_BUCKET` / `STORAGE_REGION` | Unset / unset / `auto` | S3 endpoint (https outside development/test; path-style), bucket and signing region (`auto` for R2, e.g. `us-east-1` for S3). |
-| `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` | Unset | Required with `STORAGE_BACKEND=s3`. |
-| `STORAGE_MAX_UPLOAD_BYTES` / `STORAGE_URL_EXPIRE_SECONDS` | `10485760` / `600` | Largest allowed upload, and how long presigned URLs live. |
-| `STORAGE_ALLOWED_CONTENT_TYPES` | `["image/jpeg","image/png","image/webp","application/pdf"]` | JSON array of exact content types. |
-| `MIN_SUPPORTED_APP_VERSION` / `LATEST_APP_VERSION` | `0.0.0` / `1.0.0` | Returned by `GET /v1/meta`. Mobile clients below the minimum get `426 app_update_required`. |
-| `SENTRY_DSN` / `SENTRY_RELEASE` / `SENTRY_TRACES_SAMPLE_RATE` | Unset / `api@<version>` / `0` | Sentry for the API and worker; nothing is initialised without a DSN. |
-| `RATE_LIMIT_BACKEND`                                                         | `postgres`                                        | `postgres`, or `memory` (per process; development and test only).                                                                                                                                                                                                                                                 |
-| `CORS_ORIGINS`                                                               | `["http://localhost:3000"]`                       | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh.                        |
-| `TRUSTED_HOSTS`                                                              | `["localhost","127.0.0.1","[::1]"]`               | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host.                                                                                                                                                                                                           |
-| `MAX_REQUEST_BODY_BYTES`                                                     | `1048576`                                         | Maximum HTTP body size in bytes, including chunked requests.                                                                                                                                                                                                                                                      |
-| `HEALTHCHECK_URL`                                                            | `http://127.0.0.1:8000/health`                    | Optional override for the container probe, which reads the process environment.                                                                                                                                                                                                                                   |
+| Variable                                                                     | Default                                                     | Notes                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENV`                                                                        | `production`                                                | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS.                                                                                                                              |
+| `DATABASE_URL`                                                               | Local Compose Postgres in development only                  | Required in test, staging and production. Use the Neon pooled URL for the app.                                                                                                                                                                                                                                    |
+| `MIGRATION_DATABASE_URL`                                                     | Falls back to `DATABASE_URL`                                | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`.                                                                                                                                                                                                              |
+| `SECRET_KEY`                                                                 | Local development fallback only                             | Server-side HMAC secret (IP hashes, CSRF tokens, rate-limit and audit identifiers). Set a unique secret of at least 32 characters in test, staging and production; the repository's published keys are rejected, even with surrounding whitespace. Rotating it signs web sessions out (their CSRF tokens change). |
+| `JWT_SECRET_KEY`                                                             | Derived from `SECRET_KEY` in development and test           | Access-token signing key. Required in staging and production: unique, different from `SECRET_KEY`, and at least 32/48/64 bytes for HS256/HS384/HS512. Rotating it makes clients refresh once.                                                                                                                     |
+| `JWT_ALGORITHM`                                                              | `HS256`                                                     | `HS256`, `HS384` or `HS512`.                                                                                                                                                                                                                                                                                      |
+| `JWT_ISSUER` / `JWT_AUDIENCE`                                                | `boilerplate-api`                                           | `iss`/`aud` claims, checked on every request.                                                                                                                                                                                                                                                                     |
+| `ACCESS_TOKEN_EXPIRE_MINUTES`                                                | `15`                                                        | Access-token lifetime, 1 to 60 minutes.                                                                                                                                                                                                                                                                           |
+| `REFRESH_TOKEN_EXPIRE_DAYS`                                                  | `30`                                                        | Idle timeout: each refresh extends the session by this much.                                                                                                                                                                                                                                                      |
+| `SESSION_MAX_AGE_DAYS`                                                       | `90`                                                        | Absolute session lifetime; then the user signs in again.                                                                                                                                                                                                                                                          |
+| `REAUTHENTICATION_MAX_AGE_MINUTES`                                           | `10`                                                        | How recent a sign-in or re-authentication on the session must be for account deletion, email changes and Google (un)linking.                                                                                                                                                                                      |
+| `EMAIL_TOKEN_EXPIRE_HOURS`                                                   | `24`                                                        | Lifetime of email verification and email-change links.                                                                                                                                                                                                                                                            |
+| `PASSWORD_RESET_EXPIRE_MINUTES`                                              | `30`                                                        | Lifetime of password reset links.                                                                                                                                                                                                                                                                                 |
+| `PASSWORD_BREACH_CHECK`                                                      | `false`                                                     | Reject new passwords found in Have I Been Pwned (k-anonymity range API; fails open).                                                                                                                                                                                                                              |
+| `APP_NAME`                                                                   | `Boilerplate App`                                           | Product name in emails.                                                                                                                                                                                                                                                                                           |
+| `WEB_URL`                                                                    | `http://localhost:3000`                                     | Base URL of the web app for emailed links. Staging and production require `https`.                                                                                                                                                                                                                                |
+| `GOOGLE_AUTH_ENABLED`                                                        | `false`                                                     | Enables `POST /v1/auth/google`. Requires at least one client ID below.                                                                                                                                                                                                                                            |
+| `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset                                                       | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed.                                                                                                                                                                                                       |
+| `EMAIL_BACKEND`                                                              | `console`                                                   | `console` (prints messages and links; development), `smtp`, `resend`, or `memory` (tests). Staging and production require `smtp` or `resend`. Compose uses `smtp` with Mailpit.                                                                                                                                   |
+| `EMAIL_FROM`                                                                 | `Boilerplate App <no-reply@localhost>`                      | Sender address.                                                                                                                                                                                                                                                                                                   |
+| `SMTP_HOST` / `SMTP_PORT`                                                    | `localhost` / `1025`                                        | SMTP server.                                                                                                                                                                                                                                                                                                      |
+| `SMTP_SECURITY`                                                              | `none`                                                      | `none`, `starttls`, or `tls` (implicit TLS).                                                                                                                                                                                                                                                                      |
+| `SMTP_USERNAME` / `SMTP_PASSWORD`                                            | Unset                                                       | Set both or neither.                                                                                                                                                                                                                                                                                              |
+| `SMTP_ALLOW_INSECURE`                                                        | `false`                                                     | Explicitly allow an unauthenticated plaintext local relay outside development/test. Authenticated SMTP always requires TLS.                                                                                                                                                                                       |
+| `SMTP_TIMEOUT_SECONDS`                                                       | `10`                                                        | SMTP connection timeout.                                                                                                                                                                                                                                                                                          |
+| `RESEND_API_KEY` / `RESEND_TIMEOUT_SECONDS`                                  | Unset / `10`                                                | Required with `EMAIL_BACKEND=resend`. The job id is sent as the `Idempotency-Key`.                                                                                                                                                                                                                                |
+| `WORKER_CONCURRENCY` / `JOB_POLL_INTERVAL_SECONDS`                           | `4` / `2`                                                   | Jobs the worker runs at once, and how often an idle runner polls.                                                                                                                                                                                                                                                 |
+| `JOB_TIMEOUT_SECONDS` / `JOB_LOCK_TIMEOUT_SECONDS`                           | `120` / `300`                                               | A handler is cancelled after the first; a claim older than the second is treated as lost and the job runs again. The first must be shorter.                                                                                                                                                                       |
+| `PUSH_BACKEND`                                                               | `log`                                                       | `expo` (sends through the Expo Push API), `log` (logs counts only) or `memory` (tests).                                                                                                                                                                                                                           |
+| `EXPO_ACCESS_TOKEN` / `EXPO_PUSH_TIMEOUT_SECONDS`                            | Unset / `10`                                                | Optional Expo access token (needed if the Expo project enforces enhanced push security).                                                                                                                                                                                                                          |
+| `STORAGE_BACKEND`                                                            | `disabled`                                                  | `s3` (S3, R2, MinIO), `memory` (tests) or `disabled`.                                                                                                                                                                                                                                                             |
+| `STORAGE_ENDPOINT_URL` / `STORAGE_BUCKET` / `STORAGE_REGION`                 | Unset / unset / `auto`                                      | S3 endpoint (https outside development/test; path-style), bucket and signing region (`auto` for R2, e.g. `us-east-1` for S3).                                                                                                                                                                                     |
+| `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY`                        | Unset                                                       | Required with `STORAGE_BACKEND=s3`.                                                                                                                                                                                                                                                                               |
+| `STORAGE_MAX_UPLOAD_BYTES` / `STORAGE_URL_EXPIRE_SECONDS`                    | `10485760` / `600`                                          | Largest allowed upload, and how long presigned URLs live.                                                                                                                                                                                                                                                         |
+| `STORAGE_ALLOWED_CONTENT_TYPES`                                              | `["image/jpeg","image/png","image/webp","application/pdf"]` | JSON array of exact content types.                                                                                                                                                                                                                                                                                |
+| `MIN_SUPPORTED_APP_VERSION` / `LATEST_APP_VERSION`                           | `0.0.0` / `1.0.0`                                           | Returned by `GET /v1/meta`. Mobile clients below the minimum get `426 app_update_required`.                                                                                                                                                                                                                       |
+| `SENTRY_DSN` / `SENTRY_RELEASE` / `SENTRY_TRACES_SAMPLE_RATE`                | Unset / `api@<version>` / `0`                               | Sentry for the API and worker; nothing is initialised without a DSN.                                                                                                                                                                                                                                              |
+| `RATE_LIMIT_BACKEND`                                                         | `postgres`                                                  | `postgres`, or `memory` (per process; development and test only).                                                                                                                                                                                                                                                 |
+| `CORS_ORIGINS`                                                               | `["http://localhost:3000"]`                                 | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh.                        |
+| `TRUSTED_HOSTS`                                                              | `["localhost","127.0.0.1","[::1]"]`                         | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host.                                                                                                                                                                                                           |
+| `MAX_REQUEST_BODY_BYTES`                                                     | `1048576`                                                   | Maximum HTTP body size in bytes, including chunked requests.                                                                                                                                                                                                                                                      |
+| `HEALTHCHECK_URL`                                                            | `http://127.0.0.1:8000/health`                              | Optional override for the container probe, which reads the process environment.                                                                                                                                                                                                                                   |
 
 Behind a reverse proxy, run uvicorn with `--forwarded-allow-ips` set to the proxy's
 addresses so per-IP rate limits and IP hashes see the client address, not the proxy's.
@@ -418,11 +421,11 @@ sign-in and account linking) and [ADR 0010](docs/adr/0010-rate-limits-email-audi
 
 **Platform endpoints.**
 
-| Endpoint                | Purpose                                                                                                                    |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/meta`          | `{min_supported_app_version, latest_app_version}`; no authentication, never version-gated.                                 |
-| `POST /v1/devices`      | Register or refresh the caller's Expo push token `{expo_push_token, platform, app_version}`. An existing token moves to the caller. |
-| `DELETE /v1/devices`    | Remove a token `{expo_push_token}` owned by the caller (call it on sign-out). Always `204`.                                |
+| Endpoint             | Purpose                                                                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/meta`       | `{min_supported_app_version, latest_app_version}`; no authentication, never version-gated.                                          |
+| `POST /v1/devices`   | Register or refresh the caller's Expo push token `{expo_push_token, platform, app_version}`. An existing token moves to the caller. |
+| `DELETE /v1/devices` | Remove a token `{expo_push_token}` owned by the caller (call it on sign-out). Always `204`.                                         |
 
 **Tokens.** Access tokens are HMAC-signed JWTs (HS256 by default; `typ: at+jwt`; `iss`,
 `aud`, `sub`, `sid`, `iat`, `exp`, `jti`) valid for 15 minutes, with 30 seconds of
@@ -558,13 +561,57 @@ Mobile unit tests (Jest + React Native Testing Library, no device needed):
 `make test-mobile`. They cover the design tokens (including WCAG AA contrast), the secure
 token storage wrapper, the persisted query cache, network status and the offline banner,
 the app config validation, the Android manifest that `expo prebuild` would generate, and
-routing tests that render the real `src/app` tree.
+routing and flow tests that render the real `src/app` tree against a fake API (sign-up,
+sign-in, email-link screens, items list and pull-to-refresh, an offline create replayed on
+reconnect, the 426 screen), plus unit tests for token refresh (single flight, session
+binding, transient failures), the offline queue and the push route allowlist.
 
 ## Mobile
 
-`apps/mobile` is an Expo SDK 58 app. This is the foundation only: screens are
-placeholders, and nothing calls the API yet. Auth, the generated API client and real
-data arrive in later phases.
+`apps/mobile` is an Expo SDK 58 app on the generated API client
+([ADR 0011](docs/adr/0011-api-client.md)). Design notes for sessions and the offline
+queue are in [ADR 0013](docs/adr/0013-mobile-session-and-offline-queue.md).
+
+### Features
+
+- **Auth.** Sign in, sign up (then a "check your email" screen: the API blocks sign-in
+  until the email is verified), forgot password. The email links open
+  `/auth/verify-email?token=` (asks for the password chosen at sign-up, which the API
+  requires with the token) and `/auth/reset-password?token=`. Sessions, profile (name,
+  change password) and account deletion (re-authenticates first) are in Settings.
+  The app does not change the email address or link/unlink Google yet.
+- **Token refresh.** A 401 triggers one refresh for all concurrent requests. The refresh
+  stays bound to the session the request was sent as: if the user signed out or switched
+  account meanwhile, the pending request is not replayed. Requests send `X-App-Version`,
+  `X-Platform`, `X-Workspace-Id` (the active workspace) and, on writes, `Idempotency-Key`.
+  A `426` replaces the app with a "Please update" screen.
+- **Google sign-in** uses `@react-native-google-signin/google-signin` and sends the ID token
+  to `POST /v1/auth/google`. It needs a **development or production build** (not Expo Go) and
+  `GOOGLE_WEB_CLIENT_ID` (+ `GOOGLE_IOS_CLIENT_ID` for iOS); the button is hidden when either
+  is missing. The web client id must be one of the API's configured Google client ids. Android
+  also needs your signing SHA-1 registered on the Android OAuth client in Google Cloud. None of
+  this has been run against real Google here.
+- **Items.** List with pull-to-refresh, create, edit, delete. Creates and edits go through a
+  persisted queue (see ADR 0013) and show at once as "Waiting to sync"; they are replayed
+  with their original idempotency keys when the connection returns.
+- **Workspaces, members, invitations** (provisional). The screens exist (switch, create,
+  members, invite link with share sheet and QR code, accept via `/invite/<token>`), but
+  they call endpoints that are not in the generated client yet:
+  `/v1/workspaces`, `/v1/workspaces/{id}/members`, `/v1/workspaces/{id}/invitations`,
+  `/v1/invitations/accept`. The request and response shapes are an assumption taken from the
+  spec and live in `src/features/workspaces/workspace-api.ts`; replace them with typed client
+  calls after phase 5 lands. Until then they are untested against a real server.
+- **Biometric lock** (Settings): locks at launch and after 30 s in the background; turning it
+  on requires a successful biometric check. It is a UI gate, not encryption.
+- **Push.** A dismissible card on the Items tab (not at launch) asks for permission; once
+  granted, the Expo push token is registered with `POST /v1/devices` on each start and removed
+  at sign-out. Tapping a notification follows `data.url` only if it is an allowed in-app route.
+  Tokens need a physical device, an EAS project id (`EAS_PROJECT_ID`) and, on Android, FCM
+  credentials; none of that was exercised here.
+- **Deep links.** The scheme works everywhere. For Android App Links set `APP_DOMAIN` and
+  `APP_LINK_PATHS=/auth/verify-email,/auth/reset-password,/invite/` (exact and prefix paths,
+  as the API's email links and the invite links use them). `/privacy`, `/terms` and
+  `/account-deletion` stay refused.
 
 ### Running it
 
@@ -606,14 +653,19 @@ apps/mobile/
   app.config.ts            env-driven Expo config (validated; see the env table above)
   eas.json                 EAS Build profiles and EAS Update channels
   src/app/                 routes (Expo Router)
-    _layout.tsx            providers, theme, offline banner, root stack
-    index.tsx              redirects to /sign-in (no session handling yet)
-    (auth)/                sign-in, sign-up (stack with headers)
-    (app)/                 items, settings (bottom tabs)
+    _layout.tsx            providers, session gate, app lock, protected root stack
+    index.tsx              redirects to sign-in, the app, or a pending invitation
+    (auth)/                sign-in, sign-up, check-email, forgot-password
+    auth/                  verify-email, reset-password (email deep links)
+    invite/[token].tsx     accept an invitation (deep link)
+    (app)/(tabs)/          items, workspaces, settings (bottom tabs)
+    (app)/                 item/new, item/[id], members, invite-share, workspace-new,
+                           profile, sessions, delete-account (pushed over the tabs)
+  src/features/            auth, items (queue), push, lock, workspaces
   src/components/          Screen, KeyboardAvoidingForm, TextField, Button, NetworkBanner
   src/theme/               design tokens + useTheme (ADR 0006)
   src/lib/                 runtime env, query client, network status, token storage,
-                           API client headers
+                           session store, API wiring, mutation queue
 ```
 
 ### What the foundation provides
@@ -623,7 +675,7 @@ apps/mobile/
   system bars. `Screen` pads with safe-area insets per edge; headers and the tab bar pad
   their own edges. The status bar icons follow the theme.
 - **Android back button.** In the tabs, back returns to the first tab, then leaves the
-  app (`backBehavior="initialRoute"`). "Preview app screens" uses `router.replace`, so
+  app (`backBehavior="initialRoute"`). Signing in uses `router.replace`, so
   back from the tabs doesn't return to sign-in. On sign-up, leaving with unsaved input
   (hardware back, header back, iOS swipe) asks for confirmation (`usePreventRemove`);
   "Discard" clears the input and completes the navigation. `(auth)` is anchored on
@@ -644,7 +696,7 @@ apps/mobile/
   written, and mutations (whose variables can hold passwords) never are. The cache is
   scoped per account: `AppProviders` takes a `cacheScope` (account id, or signed out),
   each scope has its own storage entry, and other scopes' entries are deleted on
-  startup. Sign-out (phase 9b) calls `useClearQueryCache()`: it stops the scope's writes
+  startup. Sign-out calls `useClearQueryCache()`: it stops the scope's writes
   (including throttled writes still queued), waits for writes in flight, then clears
   memory and deletes the entry, so nothing can recreate it. Queries pause offline and
   resume on reconnect; returning to the foreground refetches and re-checks
@@ -654,8 +706,8 @@ apps/mobile/
   appears), and it takes over the top safe-area inset while visible.
 - **Token storage** (`src/lib/token-storage.ts`): typed wrapper over `expo-secure-store`
   (Keychain / Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`). The session (access +
-  refresh token) is one entry, so a failed write never leaves a mixed pair. Nothing
-  stores tokens yet.
+  refresh token) is one entry, so a failed write never leaves a mixed pair. The
+  session store (`src/lib/session.ts`) is the only writer.
 - **Android release hardening.** Android Auto Backup is off (`allowBackup: false`), and
   permissions the app doesn't use (`SYSTEM_ALERT_WINDOW`, `VIBRATE`, legacy external
   storage) are removed from the merged manifest (`blockedPermissions`). A test checks the
@@ -775,4 +827,4 @@ MIT. See [LICENSE](./LICENSE).
 
 ### API client contract
 
-Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile includes an import smoke test; integration is planned for a later phase.
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web and mobile apps use the shared fetch client.

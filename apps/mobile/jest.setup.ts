@@ -34,3 +34,43 @@ jest.mock("expo-constants", () => {
     process.env = saved;
   }
 });
+
+// Native modules that have no JS implementation in Jest. Tests that care about
+// their behavior override these with their own jest.mock / mockImplementation.
+jest.mock("expo-notifications", () => ({
+  setNotificationHandler: jest.fn(),
+  getPermissionsAsync: jest.fn(async () => ({
+    status: "undetermined",
+    canAskAgain: true,
+  })),
+  requestPermissionsAsync: jest.fn(async () => ({ status: "denied" })),
+  setNotificationChannelAsync: jest.fn(async () => undefined),
+  getExpoPushTokenAsync: jest.fn(async () => ({ data: "ExponentPushToken[test]" })),
+  getLastNotificationResponseAsync: jest.fn(async () => null),
+  addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
+  AndroidImportance: { DEFAULT: 3 },
+}));
+jest.mock("expo-local-authentication", () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
+  authenticateAsync: jest.fn(async () => ({ success: true })),
+}));
+jest.mock("expo-device", () => ({
+  isDevice: false,
+  deviceName: "Test phone",
+  modelName: "Test",
+}));
+jest.mock("expo-secure-store", () => {
+  const store = new Map<string, string>();
+  return {
+    AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 1,
+    getItemAsync: jest.fn(async (key: string) => store.get(key) ?? null),
+    setItemAsync: jest.fn(
+      async (key: string, value: string) => void store.set(key, value),
+    ),
+    deleteItemAsync: jest.fn(async (key: string) => void store.delete(key)),
+  };
+});
+jest.mock("@react-native-google-signin/google-signin", () => {
+  throw new Error("native module unavailable (as in Expo Go)");
+});
