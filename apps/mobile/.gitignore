@@ -10,7 +10,9 @@ expo-env.d.ts
 /ios
 .kotlin/
 
-# Signing material
+# Signing material and EAS local credentials (eas credentials / credentials.json)
+/credentials.json
+/credentials/
 *.p8
 *.mobileprovision
 *.orig.*

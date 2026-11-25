@@ -60,8 +60,19 @@ jobs:
       - name: Format (prettier --check)
         run: pnpm exec prettier --check apps/mobile
 
-      - name: Type check, lint, test (turbo)
-        run: pnpm turbo run typecheck lint test --filter=mobile
+      # One step per script, run directly (not through Turborepo, which skips
+      # packages that lack a script): deleting or renaming a script fails CI.
+      - name: Type check (tsc)
+        working-directory: apps/mobile
+        run: pnpm run typecheck
+
+      - name: Lint (eslint)
+        working-directory: apps/mobile
+        run: pnpm run lint
+
+      - name: Unit tests (jest)
+        working-directory: apps/mobile
+        run: pnpm run test --ci
 
       # Checks SDK version compatibility of dependencies and the app config
       # (queries Expo's and React Native Directory's public APIs).
