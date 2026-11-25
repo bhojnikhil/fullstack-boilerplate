@@ -46,6 +46,71 @@
         "title": "ChangePasswordRequest",
         "type": "object"
       },
+      "DeviceRegister": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[0-9A-Za-z.+-]+$",
+            "title": "App Version",
+            "type": "string"
+          },
+          "expo_push_token": {
+            "maxLength": 255,
+            "pattern": "(?:Expo|Exponent)PushToken\\[[A-Za-z0-9_-]{1,100}\\]",
+            "title": "Expo Push Token",
+            "type": "string"
+          },
+          "platform": {
+            "enum": ["ios", "android"],
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": ["expo_push_token", "platform", "app_version"],
+        "title": "DeviceRegister",
+        "type": "object"
+      },
+      "DeviceResponse": {
+        "properties": {
+          "app_version": {
+            "title": "App Version",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": ["id", "platform", "app_version", "last_seen_at"],
+        "title": "DeviceResponse",
+        "type": "object"
+      },
+      "DeviceUnregister": {
+        "additionalProperties": false,
+        "properties": {
+          "expo_push_token": {
+            "maxLength": 255,
+            "pattern": "(?:Expo|Exponent)PushToken\\[[A-Za-z0-9_-]{1,100}\\]",
+            "title": "Expo Push Token",
+            "type": "string"
+          }
+        },
+        "required": ["expo_push_token"],
+        "title": "DeviceUnregister",
+        "type": "object"
+      },
       "EmailRequest": {
         "additionalProperties": false,
         "properties": {
@@ -308,6 +373,21 @@
         },
         "required": ["email", "password"],
         "title": "LoginRequest",
+        "type": "object"
+      },
+      "Meta": {
+        "properties": {
+          "latest_app_version": {
+            "title": "Latest App Version",
+            "type": "string"
+          },
+          "min_supported_app_version": {
+            "title": "Min Supported App Version",
+            "type": "string"
+          }
+        },
+        "required": ["min_supported_app_version", "latest_app_version"],
+        "title": "Meta",
         "type": "object"
       },
       "ReauthenticateRequest": {
@@ -2272,6 +2352,187 @@
         "tags": ["auth"]
       }
     },
+    "/v1/devices": {
+      "delete": {
+        "description": "Stop pushes to this token (call on sign-out). Unknown tokens are not an error.",
+        "operationId": "devices_unregister",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceUnregister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unregister",
+        "tags": ["devices"]
+      },
+      "post": {
+        "description": "Register (or refresh) this installation's Expo push token for the signed-in user.",
+        "operationId": "devices_register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register",
+        "tags": ["devices"]
+      }
+    },
     "/v1/items": {
       "get": {
         "operationId": "items_list_items",
@@ -3377,6 +3638,66 @@
         ],
         "summary": "Change Password",
         "tags": ["me"]
+      }
+    },
+    "/v1/meta": {
+      "get": {
+        "description": "Version information for clients; no authentication.",
+        "operationId": "meta_get_meta",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meta"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get Meta",
+        "tags": ["meta"]
       }
     }
   }
