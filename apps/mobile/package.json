@@ -10,7 +10,8 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "doctor:expo": "expo-doctor"
+    "doctor:expo": "expo-doctor",
+    "release:update": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-update-cli.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "15.1.1",
