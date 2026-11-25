@@ -121,6 +121,8 @@ def create_app(
             "Authorization",
             "Content-Type",
             "Idempotency-Key",
+            "X-Workspace-Id",
+            "X-App-Version",
             REQUEST_ID,
             PLATFORM_HEADER,
             CSRF_HEADER,

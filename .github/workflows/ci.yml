@@ -28,6 +28,7 @@ jobs:
       mobile: ${{ steps.filter.outputs.mobile }}
       scripts: ${{ steps.filter.outputs.scripts }}
       docker: ${{ steps.filter.outputs.docker }}
+      contracts: ${{ steps.filter.outputs.contracts }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,6 +49,7 @@ jobs:
           mobile="$js|^(apps/mobile/|\.github/workflows/(ci|mobile)\.yml$)"
           scripts='^(scripts/|docker-compose[^/]*\.yml$|\.github/workflows/ci\.yml$)'
           docker="$api|$web|$scripts|^Makefile$"
+          contracts="$js|^(apps/api/|scripts/|\.github/workflows/ci\.yml$|Makefile$)"
           if [ "$EVENT" = pull_request ]; then
             files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           else
@@ -65,6 +67,7 @@ jobs:
           emit mobile "$mobile"
           emit scripts "$scripts"
           emit docker "$docker"
+          emit contracts "$contracts"
 
   api:
     name: api (ruff, mypy, pytest)
@@ -155,7 +158,7 @@ jobs:
         run: pnpm turbo run lint typecheck build
 
       - name: Unit tests (Vitest)
-        run: pnpm --filter web test
+        run: pnpm turbo run test --filter=web --filter=@repo/api-client
 
       - name: Install Chromium and system dependencies
         run: pnpm --filter web exec playwright install --with-deps chromium
@@ -239,6 +242,27 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  contracts:
+    name: OpenAPI contract drift
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: make gen-client
+      - run: git diff --exit-code -- packages/api-client/openapi.json packages/api-client/src/schema.d.ts
+
   mobile:
     needs: changes
     if: needs.changes.outputs.mobile == 'true'
@@ -249,7 +273,7 @@ jobs:
   ci:
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, api, web, scripts, docker, mobile]
+    needs: [changes, api, web, scripts, docker, mobile, contracts]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded or been skipped

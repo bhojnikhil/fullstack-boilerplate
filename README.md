@@ -821,3 +821,7 @@ before any Corepack shim on your `PATH`.
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+### API client contract
+
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile has a Jest import smoke test; Metro bundling and application integration remain unverified.

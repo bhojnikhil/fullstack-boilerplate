@@ -162,7 +162,7 @@ async def test_security_headers_host_and_cors(config, session_factory):
 
         preflight = {
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "Idempotency-Key, X-Request-Id",
+            "Access-Control-Request-Headers": "Idempotency-Key, X-Request-Id, X-Workspace-Id, X-App-Version, X-Platform",
         }
         good = await client.options(
             "/v1/items", headers={**preflight, "Origin": "https://web.example"}

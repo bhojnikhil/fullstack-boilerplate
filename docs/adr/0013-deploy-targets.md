@@ -1,4 +1,4 @@
-# ADR 0012: Deploy targets and release workflows
+# ADR 0013: Deploy targets and release workflows
 
 Status: Accepted
 
