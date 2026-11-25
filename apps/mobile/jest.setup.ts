@@ -1,3 +1,10 @@
+import { APP_CONFIG_ENV_KEYS } from "./app.config";
+
+// Tests must not depend on the developer's shell: a release-style
+// APP_VARIANT/API_URL (or EAS markers) exported there would otherwise change
+// what app.config.ts produces. Jest gives each test file its own process.env.
+for (const key of APP_CONFIG_ENV_KEYS) delete process.env[key];
+
 // Native modules without a JS implementation in Jest.
 jest.mock("@react-native-async-storage/async-storage", () =>
   jest.requireActual(
@@ -8,15 +15,22 @@ jest.mock("@react-native-community/netinfo", () =>
   jest.requireActual("@react-native-community/netinfo/jest/netinfo-mock.js"),
 );
 
-// Constants.expoConfig as the app sees it at runtime: evaluated from the real
-// app.config.ts (with the test process env, i.e. the development defaults).
+// Constants.expoConfig as the app sees it at runtime: the real app.config.ts
+// evaluated with an explicitly clean environment (the development defaults).
 jest.mock("expo-constants", () => {
   const actual = jest.requireActual("expo-constants");
-  const appConfig = jest.requireActual("./app.config").default;
-  const expoConfig = appConfig({ config: {} });
-  return {
-    ...actual,
-    __esModule: true,
-    default: { ...actual.default, expoConfig },
-  };
+  const { default: appConfig, withoutAppConfigEnv } =
+    jest.requireActual("./app.config");
+  const saved = process.env;
+  process.env = withoutAppConfigEnv(saved);
+  try {
+    const expoConfig = appConfig({ config: {} });
+    return {
+      ...actual,
+      __esModule: true,
+      default: { ...actual.default, expoConfig },
+    };
+  } finally {
+    process.env = saved;
+  }
 });

@@ -1,11 +1,13 @@
 import type { ConfigContext } from "expo/config";
 
 import appConfig, {
+  APP_CONFIG_ENV_KEYS,
   APP_VERSION,
   BLOCKED_ANDROID_PERMISSIONS,
   isEasContext,
   parseAppEnv,
   runtimeVersionFor,
+  withoutAppConfigEnv,
 } from "../app.config";
 
 const ctx = { config: {} } as ConfigContext;
@@ -257,16 +259,9 @@ describe("app.config.ts", () => {
     process.env = { ...saved };
   });
 
+  /** Evaluates app.config.ts with exactly `env` as its app settings (R2-7). */
   function withEnv(env: Record<string, string>) {
-    for (const key of [
-      "APP_DOMAIN",
-      "APP_LINK_PATHS",
-      "EAS_PROJECT_ID",
-      "SENTRY_DSN",
-    ]) {
-      delete process.env[key];
-    }
-    Object.assign(process.env, env);
+    process.env = { ...withoutAppConfigEnv(saved), ...env };
     return appConfig(ctx);
   }
 
@@ -321,5 +316,26 @@ describe("app.config.ts", () => {
     const config = withEnv({});
     expect(config.android?.allowBackup).toBe(false);
     expect(config.android?.blockedPermissions).toEqual(BLOCKED_ANDROID_PERMISSIONS);
+  });
+});
+
+describe("test isolation (R2-7)", () => {
+  it("starts every test file without app settings from the developer's shell", () => {
+    for (const key of APP_CONFIG_ENV_KEYS) expect(process.env[key]).toBeUndefined();
+  });
+
+  it("evaluates Constants.expoConfig from a clean environment", () => {
+    const Constants =
+      jest.requireMock<typeof import("expo-constants")>("expo-constants").default;
+    expect(Constants.expoConfig?.extra).toMatchObject({
+      appVariant: "development",
+      apiUrl: "http://localhost:8000",
+    });
+  });
+
+  it("withoutAppConfigEnv drops only app settings", () => {
+    expect(
+      withoutAppConfigEnv({ PATH: "/bin", APP_VARIANT: "production", EAS_BUILD: "1" }),
+    ).toEqual({ PATH: "/bin" });
   });
 });

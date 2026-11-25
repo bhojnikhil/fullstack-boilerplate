@@ -77,6 +77,38 @@ export interface AppEnv {
 
 type Env = Record<string, string | undefined>;
 
+/**
+ * Every environment variable this config reads: the app settings plus the
+ * EAS context markers. `read()` only accepts these names, so the list stays
+ * complete. Tests and the release script strip them from the inherited
+ * environment so a developer's shell can't leak into a test or a release.
+ */
+export const APP_CONFIG_ENV_KEYS = [
+  "APP_VARIANT",
+  "API_URL",
+  "APP_NAME",
+  "APP_SLUG",
+  "EXPO_OWNER",
+  "ANDROID_PACKAGE",
+  "IOS_BUNDLE_ID",
+  "APP_SCHEME",
+  "APP_DOMAIN",
+  "APP_LINK_PATHS",
+  "EAS_PROJECT_ID",
+  "SENTRY_DSN",
+  "EAS_BUILD",
+  "EAS_BUILD_PROFILE",
+  "EXPO_NO_DOTENV",
+] as const;
+export type AppConfigEnvKey = (typeof APP_CONFIG_ENV_KEYS)[number];
+
+/** A copy of `env` without any of APP_CONFIG_ENV_KEYS. */
+export function withoutAppConfigEnv<T extends Env>(env: T): T {
+  const copy: T = { ...env };
+  for (const key of APP_CONFIG_ENV_KEYS) delete copy[key];
+  return copy;
+}
+
 const DEFAULTS = {
   name: "Boilerplate",
   slug: "fullstack-boilerplate",
@@ -102,7 +134,7 @@ const APP_LINK_PATH_RE = /^(\/[A-Za-z0-9._~-]+)+\/?$/;
 const SLUG_RE = /^[a-z0-9-]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function read(env: Env, key: string): string | undefined {
+function read(env: Env, key: AppConfigEnvKey): string | undefined {
   const value = env[key]?.trim();
   return value ? value : undefined;
 }

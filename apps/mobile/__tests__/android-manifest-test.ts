@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { BLOCKED_ANDROID_PERMISSIONS } from "../app.config";
+import { BLOCKED_ANDROID_PERMISSIONS, withoutAppConfigEnv } from "../app.config";
 
 /**
  * Runs Expo's config plugins in introspection mode (what `expo prebuild` would
@@ -21,7 +21,8 @@ function introspectProductionManifest() {
       cwd: projectRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
+        // Explicit app settings only; nothing from the developer's shell (R2-7).
+        ...withoutAppConfigEnv(process.env),
         EXPO_NO_DOTENV: "1",
         APP_VARIANT: "production",
         API_URL: "https://api.acme.dev",
