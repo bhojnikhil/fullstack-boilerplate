@@ -5,18 +5,17 @@ A starter monorepo with a **FastAPI** backend (`apps/api`) and a **Next.js 15** 
 locally with Docker Compose, and is tested in GitHub Actions.
 
 > [!WARNING]
-> **Not production-ready yet.** A v2 upgrade (auth redesign, multi-tenancy, mobile app,
-> real deploys) is in progress as a series of PRs. Known issues in the current code that
-> you should not ship:
+> **Not production-ready yet.** A v2 upgrade (multi-tenancy, background jobs, mobile app,
+> web rebuild, real deploys) is in progress as a series of PRs. Gaps in the current code:
 >
-> - Google OAuth: the `state` parameter is never verified (login CSRF), the JWT is put in
->   the redirect URL, and the frontend has no `/auth/callback` page, so Google sign-in
->   ends on a 404.
-> - A Google identity is auto-linked to any existing account with the same email, and
->   registration does not verify email (pre-account-takeover risk).
-> - Access tokens are 7-day JWTs with no refresh tokens, revocation, or rate limiting.
-> - Google access/refresh tokens are requested (`access_type=offline`) and stored in
->   plaintext.
+> - Emailed links open web pages (`/auth/verify-email`, `/auth/reset-password`,
+>   `/auth/confirm-email`, `/auth/forgot-password`) that the web app does not have yet;
+>   they arrive with the web rebuild. Until then, post the token from the email to the API
+>   (see [Authentication](#authentication)).
+> - Email is sent by an in-process task after the response. A crash or SMTP outage at that
+>   moment loses the message; a durable job queue with retries is planned.
+> - Expired sessions, refresh tokens, emailed tokens and rate-limit rows are not purged yet.
+> - The web app has no Google sign-in button yet (the API endpoint exists).
 
 ## Repository layout
 
@@ -37,9 +36,13 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - Python 3.13, FastAPI, async SQLAlchemy 2.1, psycopg 3 and PostgreSQL 16.
 - Router → Service → Repository layers in `app/modules/auth` and `app/modules/items`.
   The request session commits after the response is prepared and rolls back on errors.
-- Email/password registration and sign-in with bcrypt and JWT bearer tokens.
-  Profile reads and updates use `/v1/auth/me`. The existing Google redirect endpoints
-  are `/v1/auth/google/login` and `/v1/auth/google/callback`.
+- Accounts and authentication ([details](#authentication)): email/password with argon2id,
+  email verification, password reset, Sign in with Google by ID token, 15-minute access
+  JWTs with rotating refresh tokens per device session, session management, step-up
+  re-authentication, account deletion, Postgres-backed rate limiting and an audit log.
+- Email through a small provider interface: console (development), SMTP, and an
+  in-memory backend for tests. Compose runs [Mailpit](https://mailpit.axllent.org/) to
+  view messages locally.
 - User-scoped item CRUD at `/v1/items`, with cursor pagination and optional
   idempotency keys on signed-in mutations. The OpenAPI operation IDs use the module
   and handler names.
@@ -58,8 +61,10 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - Next.js 15 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
   config in `packages/config`.
 - Pages: `/`, `/auth/login`, `/auth/register`, `/items`.
-- axios API client (`lib/api.ts`) that sends the JWT from `localStorage` and redirects to
-  login on 401. Zustand auth store (`lib/auth-store.ts`).
+- axios API client (`lib/api.ts`) that keeps the access token in memory, refreshes it
+  silently with the httpOnly refresh cookie and CSRF token (one refresh at a time across
+  tabs where the Web Locks API exists), and sends `X-Platform: web`. Zustand auth store
+  (`lib/auth-store.ts`). Registration signs in with the chosen password afterward.
 - Plain CSS (`app/globals.css`). No component library, no Tailwind, no dark mode.
 - No Google sign-in button and no frontend tests yet.
 
@@ -74,7 +79,8 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   - Web: Next.js standalone server, running as the unprivileged `node` user.
   - Both have `HEALTHCHECK`s that require a 2xx response and don't follow redirects.
 - `docker-compose.yml`: `postgres`, `api` (`dev` target, hot reload, source mounted),
-  `web` (production build; rebuild to see changes, or use `make dev` for hot reload).
+  `web` (production build; rebuild to see changes, or use `make dev` for hot reload) and
+  `mailpit` (SMTP on 1025, inbox UI on 8025). The API sends its email to Mailpit.
 - `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
   and local DBs (at any depth) out of images.
 - GitHub Actions (`.github/workflows/ci.yml`), with every third-party action pinned to a
@@ -85,11 +91,14 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
     `next build` via Turborepo;
   - **scripts**: `scripts/test-customize.sh`, `scripts/test-check-containers.sh`;
   - **docker**: `scripts/test-dockerignore.sh`, build all images, then start postgres,
-    api and web as packaged, and require all to be healthy. The API smoke uses production
-    settings, a temporary signing key and a host allowlist that excludes loopback. It
-    checks HSTS, JSON logs and startup failure without a key. CI requires `/ready`
-    to return HTTP 503 before explicit migrations and 2xx afterward. The API and web
-    must run as unprivileged users with no mounts. Locally use `make smoke`.
+    mailpit, api and web as packaged, and require all to be healthy. The API smoke uses
+    production settings, temporary signing keys and a host allowlist that excludes
+    loopback. It checks HSTS, JSON logs, startup failure without `SECRET_KEY` or
+    `JWT_SECRET_KEY`, and a sign-up whose verification email is delivered over SMTP to
+    Mailpit, verified, and followed by a web sign-in that sets a `Secure`, `HttpOnly`,
+    `SameSite=Strict` refresh cookie. CI requires `/ready` to return HTTP 503 before
+    explicit migrations and 2xx afterward. The API and web must run as unprivileged users
+    with no mounts. Locally use `make smoke`.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -112,6 +121,7 @@ make up
 Then open:
 
 - Web: http://localhost:3000. Create a user at `/auth/register`.
+- Mailpit: http://localhost:8025. Verification and other emails land here.
 - API docs (Swagger UI): http://localhost:8000/docs (ReDoc: `/redoc`)
 
 `make up` waits for Postgres and runs Alembic in a one-off container before starting
@@ -120,9 +130,10 @@ to apply migrations. The Compose development API bind-mounts `apps/api` and read
 `.env`, with Compose's service environment taking precedence. The packaged image reads
 its process environment.
 
-Compose publishes Postgres and the API on IPv4 loopback (`127.0.0.1`) only, on host
-ports 5432 and 8000 by default. The web port defaults to 3000. Set `POSTGRES_PORT`,
-`API_PORT`, and `WEB_PORT` on the command line if those ports are in use.
+Compose publishes Postgres, the API, the web app and Mailpit on IPv4 loopback
+(`127.0.0.1`) only, on host ports 5432, 8000, 3000, 8025 (Mailpit UI) and 1025 (Mailpit
+SMTP) by default. Set `POSTGRES_PORT`, `API_PORT`, `WEB_PORT`, `MAILPIT_UI_PORT` and
+`MAILPIT_SMTP_PORT` on the command line if those ports are in use.
 
 ## Upgrading an existing checkout
 
@@ -148,8 +159,22 @@ items pagination index concurrently.
 Use `postgresql://` or `postgresql+psycopg://` URLs. Earlier Compose projects that
 still run a service called `client` can stop that container with
 `docker compose down --remove-orphans`, keeping the database volume. Rebuild the API
-and web together when updating to the `/v1` paths. If Google OAuth is configured,
-also update the callback URI in Google and `GOOGLE_REDIRECT_URI`.
+and web together when updating to the `/v1` paths.
+
+Revision `0003` (auth redesign) changes accounts:
+
+- It refuses to run while two users have emails that differ only by letter case; merge or
+  rename those accounts first (the error message includes a query that lists them). It
+  builds the case-insensitive unique index concurrently and keeps the old exact-case
+  index for one more release so previous instances keep working during a rollout.
+- It drops the Google access/refresh tokens that the removed redirect flow stored. Linked
+  Google identities are kept. Configure `GOOGLE_AUTH_ENABLED` and your client IDs, and
+  remove `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` and `FRONTEND_URL` (now
+  `WEB_URL`); unknown variables are ignored.
+- Existing users start unverified. Their bcrypt password hashes keep working and are
+  replaced with argon2id at their next sign-in.
+- Old 7-day access tokens stop working: users sign in again. Set `JWT_SECRET_KEY` in
+  staging and production before deploying.
 
 ## Host development
 
@@ -186,16 +211,35 @@ uv run --locked uvicorn app.main:app --reload --no-access-log
 | `ENV` | `production` | Allowed values are `development`, `test`, `staging`, and `production`. The Compose dev service and `.env.example` set `development`. Other environments use JSON logs and send HSTS. |
 | `DATABASE_URL` | Local Compose Postgres in development only | Required in test, staging and production. Use the Neon pooled URL for the app. |
 | `MIGRATION_DATABASE_URL` | Falls back to `DATABASE_URL` | Use the Neon direct URL for Alembic. Preserve provider connection options such as `sslmode=require`. |
-| `SECRET_KEY` | Local development fallback only | Set a unique secret of at least 32 characters in test, staging and production. |
-| `JWT_ALGORITHM` | `HS256` | Signing algorithm. |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | JWT lifetime in minutes. |
-| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased. Omit paths, even a trailing slash. |
+| `SECRET_KEY` | Local development fallback only | Server-side HMAC secret (IP hashes, CSRF tokens, rate-limit and audit identifiers). Set a unique secret of at least 32 characters in test, staging and production; the repository's published keys are rejected, even with surrounding whitespace. Rotating it signs web sessions out (their CSRF tokens change). |
+| `JWT_SECRET_KEY` | Derived from `SECRET_KEY` in development and test | Access-token signing key. Required in staging and production: unique, different from `SECRET_KEY`, and at least 32/48/64 bytes for HS256/HS384/HS512. Rotating it makes clients refresh once. |
+| `JWT_ALGORITHM` | `HS256` | `HS256`, `HS384` or `HS512`. |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | `boilerplate-api` | `iss`/`aud` claims, checked on every request. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access-token lifetime, 1 to 60 minutes. |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Idle timeout: each refresh extends the session by this much. |
+| `SESSION_MAX_AGE_DAYS` | `90` | Absolute session lifetime; then the user signs in again. |
+| `REAUTHENTICATION_MAX_AGE_MINUTES` | `10` | How recent a sign-in or re-authentication on the session must be for account deletion, email changes and Google (un)linking. |
+| `EMAIL_TOKEN_EXPIRE_HOURS` | `24` | Lifetime of email verification and email-change links. |
+| `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Lifetime of password reset links. |
+| `PASSWORD_BREACH_CHECK` | `false` | Reject new passwords found in Have I Been Pwned (k-anonymity range API; fails open). |
+| `APP_NAME` | `Boilerplate App` | Product name in emails. |
+| `WEB_URL` | `http://localhost:3000` | Base URL of the web app for emailed links. Staging and production require `https`. |
+| `GOOGLE_AUTH_ENABLED` | `false` | Enables `POST /v1/auth/google`. Requires at least one client ID below. |
+| `GOOGLE_WEB_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` / `GOOGLE_IOS_CLIENT_ID` | Unset | OAuth client IDs (`*.apps.googleusercontent.com`) whose ID tokens are accepted. No client secret is needed. |
+| `EMAIL_BACKEND` | `console` | `console` (prints messages and links; development), `smtp`, or `memory` (tests). Staging and production require `smtp`. Compose uses `smtp` with Mailpit. |
+| `EMAIL_FROM` | `Boilerplate App <no-reply@localhost>` | Sender address. |
+| `SMTP_HOST` / `SMTP_PORT` | `localhost` / `1025` | SMTP server. |
+| `SMTP_SECURITY` | `none` | `none`, `starttls`, or `tls` (implicit TLS). |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | Unset | Set both or neither. |
+| `SMTP_TIMEOUT_SECONDS` | `10` | SMTP connection timeout. |
+| `RATE_LIMIT_BACKEND` | `postgres` | `postgres`, or `memory` (per process; development and test only). |
+| `CORS_ORIGINS` | `["http://localhost:3000"]` | JSON array of explicit `http://` or `https://` origins with an optional port. Origins are lowercased and default ports (`:443`, `:80`) are dropped, as browsers send them. Omit paths, even a trailing slash. Also the allowlist for the `Origin` check on web sign-in and cookie refresh. |
 | `TRUSTED_HOSTS` | `["localhost","127.0.0.1","[::1]"]` | JSON array of permitted hosts without ports. Staging and production reject `*`. Probes accept any Host. |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum HTTP body size in bytes, including chunked requests. |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Unset | Optional pair. Set both to enable Google OAuth. |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:8000/v1/auth/google/callback` | Must match the Google OAuth client configuration. |
-| `FRONTEND_URL` | `http://localhost:3000` | Browser destination for the legacy OAuth redirect. |
 | `HEALTHCHECK_URL` | `http://127.0.0.1:8000/health` | Optional override for the container probe, which reads the process environment. |
+
+Behind a reverse proxy, run uvicorn with `--forwarded-allow-ips` set to the proxy's
+addresses so per-IP rate limits and IP hashes see the client address, not the proxy's.
 
 Run the Alembic upgrade with the direct connection before starting new API
 instances. `/ready` returns 503 if the DB is unreachable, unmigrated or behind the
@@ -230,13 +274,117 @@ make fresh                     # wipe the DB volume, rebuild, start
 make smoke                     # build + start all images as packaged; healthy, non-root, no mounts
 ```
 
+## Authentication
+
+Design records: [ADR 0005](docs/adr/0005-auth-tokens-and-sessions.md) (tokens, sessions,
+web and mobile transport), [ADR 0006](docs/adr/0006-google-id-token-sign-in.md) (Google
+sign-in and account linking) and [ADR 0007](docs/adr/0007-rate-limits-email-audit.md)
+(rate limits, email delivery, audit log, enumeration resistance).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/auth/register` | Create an account and email a verification link. Always `202` with the same body. |
+| `POST /v1/auth/login` | Email and password sign-in. Returns tokens (below). |
+| `POST /v1/auth/google` | Sign in or sign up with a Google ID token `{id_token}`. |
+| `POST /v1/auth/refresh` | Exchange a refresh token for new tokens (rotation). |
+| `POST /v1/auth/logout` | Revoke the current session. |
+| `POST /v1/auth/verify-email` | Confirm an email address with the emailed token. |
+| `POST /v1/auth/verify-email/resend` | Send a new verification link (signed in). |
+| `POST /v1/auth/password/forgot` | Email a reset link. Always `202` with the same body. |
+| `POST /v1/auth/password/reset` | Set a new password with the emailed token; signs out every session. |
+| `POST /v1/auth/email/confirm` | Confirm a new email address with the emailed token. |
+| `POST /v1/auth/reauthenticate` | Confirm the user with `{password}` or a Google `{id_token}` issued in the last few minutes. |
+| `POST`/`DELETE /v1/auth/google/link` | Link or unlink Google for the signed-in user (recent re-authentication required). |
+| `GET /v1/auth/sessions` | The user's active sessions (devices), the current one marked. |
+| `DELETE /v1/auth/sessions/{session_id}` | Revoke one session. |
+| `POST /v1/auth/sessions/revoke-others` | Revoke every session except the current one. |
+| `GET`/`PATCH /v1/me` | Read or update the profile. |
+| `POST /v1/me/password` | Change the password (current password required); signs out other sessions. |
+| `POST /v1/me/email` | Request an email change; the address changes once the new one is confirmed. |
+| `DELETE /v1/me` | Delete the account (recent re-authentication required). |
+
+**Tokens.** Access tokens are HMAC-signed JWTs (HS256 by default; `typ: at+jwt`; `iss`,
+`aud`, `sub`, `sid`, `iat`, `exp`, `jti`) valid for 15 minutes, with 30 seconds of
+tolerance for clock differences between API instances. Every request also checks that the session
+(`sid`) is still active, so signing out or revoking a session takes effect immediately.
+Refresh tokens are random 256-bit strings stored only as SHA-256 digests. Each one works
+once: refreshing returns a new one. Presenting a refresh token that was already used
+revokes the whole session (its token family) and is recorded as `refresh_token_reused`,
+so clients must not refresh concurrently with the same token. Sessions expire after 30
+idle days and at most 90 days after sign-in.
+
+**Web clients** send `X-Platform: web` when signing in. The refresh token is then set as
+an `HttpOnly`, `Secure` (except in development), `SameSite=Strict` cookie limited to
+`/v1/auth/refresh`, and the response body carries a CSRF token instead. To refresh, send
+no body, the cookie and an `X-CSRF-Token` header; the request's `Origin` must be in
+`CORS_ORIGINS`. The CSRF token is bound to the session (an HMAC of its ID) and matched
+against a second cookie. The cookie is host-only on the API's host, so the web app and
+API must be same-site (for example `app.example.com` and `api.example.com`). The
+current web app keeps the access token in memory and the CSRF token in `localStorage`.
+
+**Mobile and other clients** (any other `X-Platform` value, or none) get `refresh_token`
+in the response body and send `{"refresh_token": ...}` to `/v1/auth/refresh`. They should
+store it in secure storage.
+
+**Passwords** are 12 to 128 characters for new passwords, hashed with argon2id
+(19 MiB, 2 iterations, 1 lane). Hashes from the previous release (bcrypt) are verified
+and upgraded at sign-in. The breached-password check is optional and off by default.
+
+**Email verification.** Users can sign in before verifying. A verified email is required
+for automatic Google linking. Emailed links put the token in the URL fragment
+(`#token=`), so it is not sent to web servers or in `Referer` headers. Until the web pages
+exist, take the token from the email (Mailpit locally) and post it to the endpoint above.
+
+**Google.** `POST /v1/auth/google` accepts ID tokens from Google Identity Services (web)
+or native sign-in on Android and iOS. google-auth checks the signature, issuer, expiry
+and that the audience is one of the configured client IDs. The API never requests or
+stores Google access or refresh tokens. Linking: a known Google identity signs in to its
+account. Otherwise Google must report the email as verified; a new email creates an
+account, and an existing account is linked automatically only if its email is verified.
+If not, the response is `409 google_link_required`: sign in to that account (or reset its
+password, which proves control of the inbox) and link Google explicitly. Unlinking
+requires another sign-in method.
+
+**Account deletion.** `DELETE /v1/me` needs a sign-in or `POST /v1/auth/reauthenticate`
+on the same session within `REAUTHENTICATION_MAX_AGE_MINUTES`. It runs the registered
+deletion hooks (a module can block deletion with `409 account_deletion_blocked` or clean
+up data it owns; see `app/modules/auth/deletion.py`), deletes the user row and,
+through foreign-key cascades, sessions, refresh tokens, linked identities, emailed
+tokens, idempotency records and items, then emails a confirmation. Audit events are kept
+with the user ID but without email addresses or names.
+
+**Rate limits** return `429` with `Retry-After` and the error envelope (`rate_limited`,
+`details.retry_after`). Identifiers are stored as HMAC digests.
+
+| Action | Per IP | Per account |
+| --- | --- | --- |
+| Sign-in | 50 / 15 min | 20 / 15 min, plus a lockout after 5 consecutive failures: 30 s, doubling to 15 min |
+| Registration | 10 / hour | 3 / hour per email |
+| Google sign-in | 50 / 15 min | 20 / 15 min per Google account |
+| Password reset request | 10 / hour | 3 / hour per email |
+| Verification resend | 10 / hour | 3 / hour |
+| Email change request | | 3 / hour |
+| Re-authentication and password change | | 10 / 15 min, plus the failure lockout |
+
+**Enumeration.** Registration and reset requests answer the same way for every address,
+and sign-in failures share one error (accounts without a password are checked against a
+dummy hash). One limit remains: someone who registers an address and then signs in with
+the password they chose learns that the address had no account. That needs a new
+account per probe, is rate limited, and emails the address's owner.
+
+**Audit log.** `audit_events` records sign-in success and failure, sign-out, refresh
+token reuse, session revocation, re-authentication, registration, email verification,
+password change, reset request and reset, email change request and change, Google link
+and unlink, and account deletion, with the user and session IDs, an IP digest and a
+coarse client label. Failed sign-ins store an email digest, not the address.
+
 ## API contracts
 
 `GET /v1/items?limit=25` returns `{"items": [...], "next_cursor": "..."}`.
 Pass the returned cursor as `cursor` on the next request. The maximum page size
 is 100 and a null cursor marks the last page.
 
-`POST /v1/items`, `PATCH/DELETE /v1/items/{item_id}` and `PATCH /v1/auth/me` accept an
+`POST /v1/items`, `PATCH/DELETE /v1/items/{item_id}` and `PATCH /v1/me` accept an
 optional `Idempotency-Key` of up to 128 visible ASCII characters. Retry with the
 same user, key, method, path, query string, media type and identical body bytes.
 `Content-Type` parameters such as `charset` are ignored. Preserve the serialized JSON,
@@ -260,10 +408,12 @@ For a targeted run, use `uv run --locked pytest --no-cov tests/test_settings.py`
 skip the suite-wide coverage gate. The test user needs
 permission to create schemas. Each database test applies Alembic to its own schema
 and drops the schema afterward. HTTP tests use httpx's ASGI transport and real
-request transactions. CI applies migrations to its Postgres 16 service, runs
-`alembic check` for schema drift and runs the same suite. Plain pytest, `make test`
-and CI share the 96.0% branch-aware coverage gate in `apps/api/pyproject.toml`,
-with greenlet and thread tracing enabled.
+request transactions. Tests use the in-memory email and rate-limit backends and a fake
+Google verifier; the Postgres rate limiter and the real Google verifier (with locally
+signed tokens and a mocked certificate endpoint) have their own tests. CI applies
+migrations to its Postgres 16 service, runs `alembic check` for schema drift and runs
+the same suite. Plain pytest, `make test` and CI share the 96.0% branch-aware coverage
+gate in `apps/api/pyproject.toml`, with greenlet and thread tracing enabled.
 
 ## Adding a domain entity
 
