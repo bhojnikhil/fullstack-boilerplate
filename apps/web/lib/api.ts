@@ -1,49 +1,19 @@
-import axios, { AxiosInstance, InternalAxiosRequestConfig } from "axios";
-import { SessionChangedError } from "./session";
+import {
+  createApiClient,
+  SessionChangedError,
+  type components,
+} from "@repo/api-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-// The CSRF token is not a credential on its own: it only works together with the
-// httpOnly refresh cookie, and other sites cannot read this origin's storage.
 const CSRF_STORAGE_KEY = "csrf_token";
+export type Item = components["schemas"]["ItemResponse"];
+export type User = components["schemas"]["UserResponse"];
+type TokenResponse = components["schemas"]["TokenResponse"];
 
-export interface Item {
-  id: string;
-  title: string;
-  description: string | null;
-  created_at: string;
-}
-
-interface ItemPage {
-  items: Item[];
-  next_cursor: string | null;
-}
-
-export interface User {
-  id: string;
-  email: string;
-  email_verified: boolean;
-  name: string;
-}
-
-interface TokenResponse {
-  access_token: string;
-  expires_in: number;
-  csrf_token: string | null;
-  user: User;
-}
-
-type RetriableRequest = InternalAxiosRequestConfig & {
-  _retried?: boolean;
-  _identity?: string | null;
-};
-
-// The access token lives only in memory. The refresh token is an httpOnly cookie
-// scoped to /v1/auth/refresh, so page scripts never see it.
 let accessToken: string | null = null;
-let refreshing: Promise<TokenResponse | null> | null = null;
 let identity: string | null = null;
 let sessionCsrf: string | null = null;
-
+let refreshing: Promise<TokenResponse | null> | null = null;
 function tokenIdentity(tokens: TokenResponse): string {
   try {
     const payload = JSON.parse(
@@ -54,7 +24,6 @@ function tokenIdentity(tokens: TokenResponse): string {
     return `${tokens.user.id}:invalid`;
   }
 }
-
 function storage(): Storage | null {
   try {
     return typeof window !== "undefined" ? window.localStorage : null;
@@ -62,14 +31,12 @@ function storage(): Storage | null {
     return null;
   }
 }
-
 function startSession(tokens: TokenResponse) {
   accessToken = tokens.access_token;
   identity = tokenIdentity(tokens);
   sessionCsrf = tokens.csrf_token;
   if (tokens.csrf_token) storage()?.setItem(CSRF_STORAGE_KEY, tokens.csrf_token);
 }
-
 function endSession() {
   accessToken = null;
   identity = null;
@@ -77,83 +44,62 @@ function endSession() {
     storage()?.removeItem(CSRF_STORAGE_KEY);
   sessionCsrf = null;
 }
-
-/** Run one refresh at a time across tabs: reusing a rotated refresh token signs out. */
+function changedSession() {
+  accessToken = null;
+  identity = null;
+  sessionCsrf = null;
+  if (typeof window !== "undefined")
+    window.dispatchEvent(new Event("auth-session-changed"));
+}
 function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
-  if (typeof navigator !== "undefined" && "locks" in navigator) {
+  if (typeof navigator !== "undefined" && "locks" in navigator)
     return navigator.locks.request("auth-refresh", task);
-  }
   return task();
 }
-
-export class ApiClient {
-  private client: AxiosInstance;
-
-  constructor() {
-    this.client = axios.create({
-      baseURL: API_URL,
-      // Sends the refresh cookie to /v1/auth/refresh. X-Platform: web selects cookie delivery.
-      withCredentials: true,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Platform": "web",
-      },
-    });
-
-    this.client.interceptors.request.use((config) => {
-      const request = config as RetriableRequest;
-      if (!request._retried) request._identity = identity;
-      if (accessToken) {
-        config.headers.Authorization = `Bearer ${accessToken}`;
-      }
-      return config;
-    });
-
-    // An expired access token gets one silent refresh and a retry.
-    this.client.interceptors.response.use(
-      (response) => response,
-      async (error) => {
-        const original = error.config as RetriableRequest | undefined;
-        const isAuthCall = original?.url?.startsWith("/v1/auth/") ?? false;
-        if (
-          error.response?.status === 401 &&
-          original &&
-          !original._retried &&
-          !isAuthCall
-        ) {
-          original._retried = true;
-          const refreshed = await this.refresh(original._identity);
-          if (refreshed) {
-            return this.client(original);
-          }
-          if (typeof window !== "undefined") {
-            window.location.href = "/auth/login";
-          }
-        }
-        return Promise.reject(error);
-      },
-    );
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: unknown,
+  ) {
+    super(`API request failed (${status})`);
   }
-
-  /** Exchange the refresh cookie for a new access token. Null if signed out. */
+}
+function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
+  if (!result.response.ok) throw new ApiError(result.response.status, result.error);
+  return result.data as T;
+}
+export class ApiClient {
+  private client = createApiClient({
+    baseUrl: API_URL,
+    credentials: "include",
+    platform: "web",
+    getAccessToken: () => accessToken,
+    getSessionId: () => identity,
+    refresh: async (expected) => !!(await this.refresh(expected)),
+    onSessionChanged: changedSession,
+    onRefreshFailed: () => {
+      if (typeof window !== "undefined") window.location.href = "/auth/login";
+    },
+  });
+  private authClient = createApiClient({
+    baseUrl: API_URL,
+    credentials: "include",
+    platform: "web",
+  });
   refresh(expectedIdentity?: string | null): Promise<TokenResponse | null> {
     refreshing ??= oneAtATime(async () => {
-      const csrfToken = storage()?.getItem(CSRF_STORAGE_KEY);
-      if (!csrfToken) return null;
+      const csrf = storage()?.getItem(CSRF_STORAGE_KEY);
+      if (!csrf) return null;
       try {
-        const { data } = await this.client.post<TokenResponse>(
-          "/v1/auth/refresh",
-          undefined,
-          {
-            headers: { "X-CSRF-Token": csrfToken },
-          },
+        return unwrap(
+          await this.authClient.POST("/v1/auth/refresh", {
+            headers: { "X-CSRF-Token": csrf },
+          }),
         );
-        return data;
       } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
-          if (storage()?.getItem(CSRF_STORAGE_KEY) === csrfToken) {
+        if (error instanceof ApiError && error.status === 401) {
+          if (storage()?.getItem(CSRF_STORAGE_KEY) === csrf)
             storage()?.removeItem(CSRF_STORAGE_KEY);
-          }
           accessToken = null;
           identity = null;
           sessionCsrf = null;
@@ -165,84 +111,82 @@ export class ApiClient {
       refreshing = null;
     });
     return refreshing.then((data) => {
-      if (data && expectedIdentity && tokenIdentity(data) !== expectedIdentity) {
-        // The CSRF value belongs to the shared cookie in the other tab.
-        accessToken = null;
-        identity = null;
-        sessionCsrf = null;
-        if (typeof window !== "undefined")
-          window.dispatchEvent(new Event("auth-session-changed"));
+      if (
+        data &&
+        ((expectedIdentity && tokenIdentity(data) !== expectedIdentity) ||
+          (expectedIdentity && identity !== expectedIdentity))
+      ) {
+        changedSession();
         throw new SessionChangedError();
       }
       if (data) startSession(data);
       return data;
     });
   }
-
-  // Auth endpoints
   register(email: string, name: string, password: string) {
-    return this.client.post("/v1/auth/register", { email, name, password });
+    return this.client
+      .POST("/v1/auth/register", { body: { email, name, password } })
+      .then(unwrap);
   }
-
   verifyEmail(token: string, password: string) {
-    return this.client.post("/v1/auth/verify-email", { token, password });
+    return this.client
+      .POST("/v1/auth/verify-email", { body: { token, password } })
+      .then(unwrap);
   }
-
   async login(email: string, password: string) {
-    const { data } = await this.client.post<TokenResponse>("/v1/auth/login", {
-      email,
-      password,
-    });
+    const data = unwrap(
+      await this.client.POST("/v1/auth/login", { body: { email, password } }),
+    );
     startSession(data);
     return data;
   }
-
   async logout() {
-    const expectedIdentity = identity;
-    if (!accessToken && !(await this.refresh(expectedIdentity))) {
+    const expected = identity;
+    if (!accessToken && !(await this.refresh(expected)))
       throw new Error("Could not confirm sign out. Please try again.");
-    }
     try {
-      await this.client.post("/v1/auth/logout");
+      unwrap(await this.client.POST("/v1/auth/logout"));
     } catch (error) {
-      if (!axios.isAxiosError(error) || error.response?.status !== 401) throw error;
-      if (!(await this.refresh(expectedIdentity))) {
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      if (!(await this.refresh(expected)))
         throw new Error("Could not confirm sign out. Please try again.");
-      }
-      await this.client.post("/v1/auth/logout");
+      unwrap(await this.client.POST("/v1/auth/logout"));
     }
     endSession();
   }
-
   getCurrentUser() {
-    return this.client.get<User>("/v1/me");
+    return this.client.GET("/v1/me").then(unwrap);
   }
-
-  // Items endpoints
-  getItems(cursor?: string) {
-    return this.client.get<ItemPage>("/v1/items", { params: { cursor } });
+  async getItems(cursor?: string) {
+    return {
+      data: unwrap(
+        await this.client.GET("/v1/items", { params: { query: { cursor } } }),
+      ),
+    };
   }
-
   getItem(id: string) {
-    return this.client.get(`/v1/items/${id}`);
+    return this.client
+      .GET("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .then(unwrap);
   }
-
   createItem(title: string, description: string) {
-    return this.client.post("/v1/items", { title, description });
+    return this.client.POST("/v1/items", { body: { title, description } }).then(unwrap);
   }
-
   updateItem(id: string, title: string, description: string) {
-    return this.client.patch(`/v1/items/${id}`, { title, description });
+    return this.client
+      .PATCH("/v1/items/{item_id}", {
+        params: { path: { item_id: id } },
+        body: { title, description },
+      })
+      .then(unwrap);
   }
-
   deleteItem(id: string) {
-    return this.client.delete(`/v1/items/${id}`);
+    return this.client
+      .DELETE("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .then(unwrap);
   }
-
-  // Health check
   health() {
-    return this.client.get("/health");
+    return this.client.GET("/health").then(unwrap);
   }
 }
-
 export const api = new ApiClient();
