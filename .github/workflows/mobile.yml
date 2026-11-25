@@ -1,0 +1,81 @@
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/mobile/**
+      - packages/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+      - .nvmrc
+      - .github/workflows/mobile.yml
+  # Any base branch, so stacked PRs are tested too.
+  pull_request:
+    paths:
+      - apps/mobile/**
+      - packages/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+      - .nvmrc
+      - .github/workflows/mobile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Third-party actions are pinned to full commit SHAs (tag in the comment).
+
+jobs:
+  mobile:
+    name: mobile (prettier, tsc, eslint, jest, expo-doctor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Version comes from "packageManager" in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          cache: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Format (prettier --check)
+        run: pnpm exec prettier --check apps/mobile
+
+      # One step per script, run directly (not through Turborepo, which skips
+      # packages that lack a script): deleting or renaming a script fails CI.
+      - name: Type check (tsc)
+        working-directory: apps/mobile
+        run: pnpm run typecheck
+
+      - name: Lint (eslint)
+        working-directory: apps/mobile
+        run: pnpm run lint
+
+      - name: Unit tests (jest)
+        working-directory: apps/mobile
+        run: pnpm run test --ci
+
+      # Checks SDK version compatibility of dependencies and the app config
+      # (queries Expo's and React Native Directory's public APIs).
+      - name: expo-doctor
+        working-directory: apps/mobile
+        run: pnpm run doctor:expo

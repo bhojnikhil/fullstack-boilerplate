@@ -24,7 +24,7 @@ NC := \033[0m
 .PHONY: help setup dev up down logs ps build fresh smoke \
 	migrate migrate-compose migration db-shell \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
-	fmt fmt-check build-web
+	fmt fmt-check build-web mobile test-mobile doctor-mobile
 
 help: ## Show this help message
 	@printf "$(GREEN)Available commands:$(NC)\n"
@@ -107,12 +107,18 @@ ifndef TEST_DATABASE_URL
 endif
 	@cd $(API_DIR) && ENV=test SECRET_KEY="$$(openssl rand -hex 32)" DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
 
+test-mobile: ## Mobile unit tests (Jest)
+	$(PNPM) turbo run test --filter=mobile
+
+doctor-mobile: ## expo-doctor for the mobile app
+	$(PNPM) --filter mobile run doctor:expo
+
 lint: lint-api lint-web ## Lint everything
 
 lint-api: ## ruff check
 	cd $(API_DIR) && $(UV) run --locked ruff check .
 
-lint-web: ## ESLint (via Turborepo)
+lint-web: ## ESLint for web + mobile (via Turborepo)
 	$(PNPM) turbo run lint
 
 typecheck: typecheck-api typecheck-web ## Type-check everything
@@ -120,7 +126,7 @@ typecheck: typecheck-api typecheck-web ## Type-check everything
 typecheck-api: ## mypy
 	cd $(API_DIR) && $(UV) run --locked mypy app healthcheck.py
 
-typecheck-web: ## tsc (via Turborepo)
+typecheck-web: ## tsc for web + mobile (via Turborepo)
 	$(PNPM) turbo run typecheck
 
 fmt: ## Format everything (ruff format + Prettier)
@@ -130,6 +136,9 @@ fmt: ## Format everything (ruff format + Prettier)
 fmt-check: ## Check formatting without changing files (what CI runs)
 	cd $(API_DIR) && $(UV) run --locked ruff format --check .
 	$(PNPM) format:check
+
+mobile: ## Start the Expo dev server for apps/mobile
+	$(PNPM) --filter mobile start
 
 build-web: ## Production build of the web app (via Turborepo)
 	$(PNPM) turbo run build
