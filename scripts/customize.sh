@@ -43,6 +43,14 @@ if ! [[ "$PROJECT_NAME" =~ ^[a-z0-9_-]+$ ]]; then
     exit 1
 fi
 
+# Keep the display name literal in both Next.js and Compose dotenv files.
+case "$APP_NAME" in
+    *'\'*|*'"'*|*'$'*|*'`'*|*$'\n'*|*$'\r'*)
+        printf '%bError: APP_NAME cannot contain backslashes, double quotes, dollar signs, backticks, or line breaks.%b\n' "$RED" "$NC" >&2
+        exit 1
+        ;;
+esac
+
 # Run from the repository root regardless of the caller's working directory.
 cd "$(dirname "$0")/.."
 
@@ -60,40 +68,19 @@ sed_escape() {
     printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
-# Next.js and Compose both expand variables in double-quoted values, but they
-# handle escaped quotes and backslashes differently. Expand those characters
-# from the template's literal helper variables and escape dollars directly.
-web_app_name() {
-    local name=$1 char index
-    for ((index = 0; index < ${#name}; index++)); do
-        char=${name:index:1}
-        case "$char" in
-            '"') printf '%s' '${_WEB_APP_NAME_QUOTE}' ;;
-            '\') printf '%s' '${_WEB_APP_NAME_BACKSLASH}' ;;
-            '$') printf '%s' '\$' ;;
-            *) printf '%s' "$char" ;;
-        esac
-    done
-}
-
 printf "${YELLOW}Customizing:${NC} project=%s app='%s' domain=%s\n" "$PROJECT_NAME" "$APP_NAME" "$DOMAIN"
 
 PROJECT_ESC=$(sed_escape "$PROJECT_NAME")
 APP_ESC=$(sed_escape "$APP_NAME")
 DOMAIN_ESC=$(sed_escape "$DOMAIN")
-WEB_APP_ESC=$(sed_escape "$(web_app_name "$APP_NAME")")
 
 count=0
 while IFS= read -r -d '' file; do
     if grep -qE '\{\{(PROJECT_NAME|APP_NAME|DOMAIN)\}\}' "$file"; then
-        app_replacement=$APP_ESC
-        if [ "$file" = ./apps/web/.env.example ]; then
-            app_replacement=$WEB_APP_ESC
-        fi
         sed_inplace \
             -e "s|{{PROJECT_NAME}}|${PROJECT_ESC}|g" \
             -e "s|{{DOMAIN}}|${DOMAIN_ESC}|g" \
-            -e "s|{{APP_NAME}}|${app_replacement}|g" \
+            -e "s|{{APP_NAME}}|${APP_ESC}|g" \
             "$file"
         echo "  updated ${file#./}"
         count=$((count + 1))

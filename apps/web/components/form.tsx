@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { useEffect, useId, useRef } from "react";
+import { useId } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -46,25 +46,10 @@ export function FormError({
   message?: string | null;
   failureCount?: number;
 }) {
-  const summary = useRef<HTMLParagraphElement>(null);
-  const previous = useRef({ message, failureCount });
-
-  useEffect(() => {
-    const changed =
-      previous.current.message !== message ||
-      previous.current.failureCount !== failureCount;
-    previous.current = { message, failureCount };
-    if (message && changed) summary.current?.focus();
-  }, [message, failureCount]);
-
   return (
     <div role="alert" aria-atomic="true" className="empty:sr-only">
       {message && (
-        <p
-          ref={summary}
-          tabIndex={-1}
-          className="rounded-md border border-destructive/40 p-3 text-sm text-destructive"
-        >
+        <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
           <span key={failureCount}>{message}</span>
         </p>
       )}

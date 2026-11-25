@@ -85,7 +85,7 @@ it("uses the configured Apple paths, keeping each unique component in order", as
   vi.stubEnv("IOS_BUNDLE_ID", "com.example.my-app");
   vi.stubEnv(
     "IOS_APPLINK_PATHS",
-    " /verify-email, /reset-password, /invite/*, /verify-email, ",
+    " /verify-email, /reset-password, /invite/?, /verify-email, ",
   );
 
   const response = getApple();
@@ -97,7 +97,7 @@ it("uses the configured Apple paths, keeping each unique component in order", as
           components: [
             { "/": "/verify-email" },
             { "/": "/reset-password" },
-            { "/": "/invite/*" },
+            { "/": "/invite/?" },
           ],
         },
       ],
@@ -108,7 +108,7 @@ it("uses the configured Apple paths, keeping each unique component in order", as
 it.each([
   "verify-email",
   "//other.example/app",
-  "/app?reset",
+  "/app?reset=token",
   "/app/../outside",
   ", ,",
 ])("rejects a malformed configured Apple path list (%s)", (paths) => {
@@ -118,13 +118,30 @@ it.each([
   expect(getApple().status).toBe(404);
 });
 
-it("warns once per invalid setting, without logging missing settings or their values", async () => {
-  vi.resetModules();
-  const { GET } = await import("@/app/.well-known/apple-app-site-association/route");
+it.each([
+  "/*",
+  "/",
+  "/priv*",
+  "/pri?acy",
+  "/term?",
+  "/account-deletion/",
+  "/invite/*, /privacy",
+])("rejects and warns once about the Apple path list %s", (paths) => {
+  vi.stubEnv("IOS_TEAM_ID", "ABCDE12345");
+  vi.stubEnv("IOS_BUNDLE_ID", "com.example.my-app");
+  vi.stubEnv("IOS_APPLINK_PATHS", paths);
+  expect(getApple().status).toBe(404);
+  expect(getApple().status).toBe(404);
+  expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+    "[web] IOS_APPLINK_PATHS has an invalid value.",
+  );
+});
+
+it("warns once per invalid setting, without logging missing settings or their values", () => {
   vi.stubEnv("IOS_TEAM_ID", "invalid-team");
   vi.stubEnv("IOS_APPLINK_PATHS", "invalid-path");
-  expect(GET().status).toBe(404);
-  expect(GET().status).toBe(404);
+  expect(getApple().status).toBe(404);
+  expect(getApple().status).toBe(404);
   expect(vi.mocked(console.warn).mock.calls).toEqual([
     ["[web] IOS_TEAM_ID has an invalid value."],
     ["[web] IOS_APPLINK_PATHS has an invalid value."],

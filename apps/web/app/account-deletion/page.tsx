@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PublicDocument } from "@/components/public-document";
-import { legalDetails, supportEmail, warnInvalidSetting } from "@/lib/public-settings";
+import { legalDetails, supportEmail } from "@/lib/public-settings";
 
 export const metadata: Metadata = { title: "Account deletion" };
 export const dynamic = "force-dynamic";
@@ -8,11 +8,6 @@ export const dynamic = "force-dynamic";
 export default function AccountDeletionPage() {
   const { appName } = legalDetails();
   const email = supportEmail();
-  if (!email)
-    warnInvalidSetting(
-      "WEB_SUPPORT_EMAIL",
-      "is missing or invalid for account deletion requests.",
-    );
 
   return (
     <PublicDocument title="Account deletion" template>

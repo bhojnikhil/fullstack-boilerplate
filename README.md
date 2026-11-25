@@ -92,9 +92,10 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
     settings, a temporary signing key and a host allowlist that excludes loopback. It
     checks HSTS, JSON logs and startup failure without a key. CI requires `/ready`
     to return HTTP 503 before explicit migrations and 2xx afterward. The web smoke
-    requires direct 200 JSON responses from both association URLs and checks that
-    runtime values appear on the privacy and account deletion pages. The API and web
-    must run as unprivileged users with no mounts. Locally use `make smoke`.
+    requires direct 200 JSON responses and one-hour cache headers from both association
+    URLs. It checks security headers and the runtime values in the privacy and account
+    deletion pages. The API and web must run as unprivileged users with no mounts.
+    Locally use `make smoke`.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
 - `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
 - `.pre-commit-config.yaml` is included but not run in CI.
@@ -213,14 +214,14 @@ release, keep migrations compatible with instances of the previous release. See 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image. |
-| `WEB_LEGAL_APP_NAME` | `[App name]` placeholder | Name shown in the header, page titles, and public policy and deletion templates. |
+| `WEB_LEGAL_APP_NAME` | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates. |
 | `WEB_LEGAL_DOMAIN` | `[Site domain]` placeholder | Domain shown in the privacy and terms templates. |
 | `WEB_SUPPORT_EMAIL` | Unset | Monitored mailbox for deletion requests sent from `/account-deletion`. |
 | `ANDROID_PACKAGE_NAME` | Unset | Android application ID, for example `com.example.app`. |
 | `ANDROID_SHA256_CERT_FINGERPRINTS` | Unset | Comma-separated, colon-delimited SHA-256 signing certificate fingerprints. Include the Play App Signing certificate for Play builds. |
 | `IOS_TEAM_ID` | Unset | 10-character Apple Developer Team ID. |
 | `IOS_BUNDLE_ID` | Unset | iOS bundle identifier, for example `com.example.app`. |
-| `IOS_APPLINK_PATHS` | `/app/*` | Comma-separated URL paths beginning with `/`. Supports `*` wildcards. Include the email-verification, password-reset and invite paths that the mobile app handles. |
+| `IOS_APPLINK_PATHS` | `/app/*` | Comma-separated URL paths beginning with `/`. Supports `*` for any number of characters and `?` for one character. Include the email-verification, password-reset and invite paths that the mobile app handles. The root path and any pattern matching `/privacy`, `/terms` or `/account-deletion` are rejected. |
 
 Host development and `make up` both read the legal, support and association
 settings from the optional `apps/web/.env.local` at **runtime**. After changing
@@ -232,10 +233,13 @@ standalone image directly, pass the variables to the container, for example with
 
 - `scripts/customize.sh PROJECT_NAME "App Name" DOMAIN` fills the legal app and domain
   values in the web env example. It copies that example to `apps/web/.env.local` when the
-  local file is absent. Run `make up` and visit `/privacy` to see the configured values.
+  local file is absent. The script rejects backslashes, double quotes, dollar signs,
+  backticks, and line breaks in the display name so both dotenv readers interpret it
+  literally. Run `make up` and visit `/privacy` to see the configured values.
   Before publishing, complete the privacy and terms templates and the account deletion
   template, including the in-app workflow, the data deleted or retained, and retention
-  periods. Set `WEB_SUPPORT_EMAIL` to a monitored mailbox.
+  periods. Set `WEB_SUPPORT_EMAIL` to a monitored mailbox. At startup, the web server
+  logs a warning for a missing or invalid mailbox and any invalid association setting.
 - The Android and Apple association URLs each return `application/json` from the
   slashless path and return 404 until their corresponding settings are valid. Successful
   association documents are cacheable for one hour. Verify both URLs return 200 over
@@ -298,7 +302,8 @@ On Linux, use `playwright install --with-deps chromium` to install the system li
 as well. The suite checks public navigation, theme persistence, form feedback, security
 headers, and the association URLs. It also checks that values supplied at server start
 appear in the public pages. `make smoke` repeats the HTTP checks against the Docker image
-for both association URLs and the runtime values on `/privacy` and `/account-deletion`.
+for both association URLs, response headers, and the runtime values on `/privacy` and
+`/account-deletion`.
 
 `make test` creates and uses the dedicated `boilerplate_test` database on Compose
 Postgres. To use another dedicated Postgres database, run

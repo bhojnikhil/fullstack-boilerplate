@@ -79,7 +79,7 @@ make dev                          # Compose Postgres + API, Next.js dev server o
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
 make build-web                    # production Next.js build
-make smoke                        # packaged API in production mode, migrations and probes
+make smoke                        # packaged API and web, migrations and production probes
 pnpm --filter web test            # Vitest and React Testing Library
 pnpm --filter web test:e2e        # public web smoke with Playwright Chromium
 ```

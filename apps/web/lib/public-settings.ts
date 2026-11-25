@@ -3,13 +3,13 @@ function templateValue(value: string | undefined, placeholder: string) {
   return text && !text.startsWith("{{") ? text : placeholder;
 }
 
-export function appName(placeholder = "[App name]") {
+export function appName(placeholder = "Full-stack starter") {
   return templateValue(process.env.WEB_LEGAL_APP_NAME, placeholder);
 }
 
 export function legalDetails() {
   return {
-    appName: appName(),
+    appName: appName("[App name]"),
     domain: templateValue(process.env.WEB_LEGAL_DOMAIN, "[Site domain]"),
   };
 }
@@ -17,31 +17,22 @@ export function legalDetails() {
 export function supportEmail() {
   const email = process.env.WEB_SUPPORT_EMAIL?.trim();
   // Accept a single mailbox address without mailto URL delimiters.
-  return email && /^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(email) ? email : undefined;
+  if (email && /^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(email)) return email;
+
+  warnInvalidSetting(
+    "WEB_SUPPORT_EMAIL",
+    "is missing or invalid for account deletion requests.",
+  );
+  return undefined;
 }
 
-const warnedSettings = new Set<string>();
+// Next can bundle startup instrumentation and routes separately in the same process.
+const warningKey = Symbol.for("boilerplate.web.settings-warnings");
+const warningState = globalThis as typeof globalThis & { [warningKey]?: Set<string> };
 
 export function warnInvalidSetting(name: string, reason: string) {
+  const warnedSettings = (warningState[warningKey] ??= new Set());
   if (warnedSettings.has(name)) return;
   warnedSettings.add(name);
   console.warn(`[web] ${name} ${reason}`);
-}
-
-export function configuredValue<T>(
-  name: string,
-  parse: (value: string) => T | undefined,
-) {
-  const value = process.env[name]?.trim();
-  if (!value) return undefined;
-  const parsed = parse(value);
-  if (parsed === undefined) warnInvalidSetting(name, "has an invalid value.");
-  return parsed;
-}
-
-export function commaSeparated(value: string) {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }

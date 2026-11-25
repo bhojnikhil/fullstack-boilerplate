@@ -27,6 +27,12 @@ it("links directly to registration and the sample items page", () => {
   );
 });
 
+it("renders the configured app name in the landing heading", () => {
+  vi.stubEnv("WEB_LEGAL_APP_NAME", "Acme App");
+  render(<Home />);
+  expect(screen.getByRole("heading", { level: 1, name: "Acme App" })).toBeVisible();
+});
+
 it.each([
   [PrivacyPage, "Privacy policy"],
   [TermsPage, "Terms of service"],
@@ -95,12 +101,10 @@ it.each([undefined, "invalid@example.com?bcc=another@example.com"])(
   },
 );
 
-it("logs the missing mailbox once for repeated account deletion renders", async () => {
-  vi.resetModules();
-  const { default: Page } = await import("@/app/account-deletion/page");
+it("logs the missing mailbox once for repeated account deletion renders", () => {
   const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-  render(<Page />);
-  render(<Page />);
+  render(<AccountDeletionPage />);
+  render(<AccountDeletionPage />);
   expect(warning).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("WEB_SUPPORT_EMAIL"),
   );

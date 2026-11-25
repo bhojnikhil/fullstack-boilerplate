@@ -3,11 +3,15 @@ import { expect, test } from "@playwright/test";
 test("navigates the public pages from the landing page", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Playwright runtime app");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    "Playwright runtime app includes user accounts and an example items page.",
+  );
   await expect(
     page.getByRole("link", { name: "Playwright runtime app" }),
   ).toHaveAttribute("href", "/");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Full-stack starter" }),
+    page.getByRole("heading", { level: 1, name: "Playwright runtime app" }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Create an account" })).toHaveAttribute(
     "href",
@@ -121,7 +125,7 @@ test("sets baseline security headers on the standalone server", async ({ request
   }
 });
 
-test("announces and focuses repeated registration validation errors", async ({
+test("announces repeated registration validation errors without moving focus", async ({
   page,
 }) => {
   await page.goto("/auth/register");
@@ -133,9 +137,11 @@ test("announces and focuses repeated registration validation errors", async ({
   const submit = page.getByRole("button", { name: "Register" });
   await submit.click();
   const message = alert.getByText("Passwords do not match");
-  await expect(message.locator("..")).toBeFocused();
+  await expect(message).toBeVisible();
+  await expect(submit).toBeFocused();
   const firstMessage = await message.elementHandle();
   await submit.click();
-  await expect(message.locator("..")).toBeFocused();
+  await expect(message).toBeVisible();
+  await expect(submit).toBeFocused();
   expect(await firstMessage?.evaluate((element) => element.isConnected)).toBe(false);
 });

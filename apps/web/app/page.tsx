@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { appName } from "@/lib/public-settings";
 
 export default function Home() {
   return (
@@ -10,7 +11,7 @@ export default function Home() {
       />
       <div className="relative max-w-2xl">
         <h1 className="text-4xl leading-tight font-semibold tracking-tight sm:text-6xl">
-          Full-stack starter
+          {appName()}
         </h1>
         <p className="mt-5 max-w-md text-lg leading-relaxed text-muted-foreground">
           A Next.js and FastAPI starter with user accounts and an example items page.

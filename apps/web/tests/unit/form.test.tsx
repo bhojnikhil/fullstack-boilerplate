@@ -24,20 +24,31 @@ it("associates the field label, hint, and error with its input", () => {
 });
 
 it("announces a new form error and re-announces the same error after another failure", () => {
-  const { rerender } = render(<FormError />);
+  function renderForm(message?: string, failureCount?: number) {
+    return (
+      <>
+        <TextField label="Email" />
+        <FormError message={message} failureCount={failureCount} />
+      </>
+    );
+  }
+
+  const { rerender } = render(renderForm());
+  const field = screen.getByRole("textbox", { name: "Email" });
+  field.focus();
   const alert = screen.getByRole("alert");
   expect(alert).toBeEmptyDOMElement();
 
-  rerender(<FormError message="Sign-in failed." failureCount={1} />);
+  rerender(renderForm("Sign-in failed.", 1));
   const firstMessage = screen.getByText("Sign-in failed.");
   expect(alert).toContainElement(firstMessage);
-  expect(firstMessage.parentElement).toHaveFocus();
+  expect(field).toHaveFocus();
 
-  rerender(<FormError message="Sign-in failed." failureCount={2} />);
+  rerender(renderForm("Sign-in failed.", 2));
   const repeatedMessage = screen.getByText("Sign-in failed.");
   expect(firstMessage).not.toBeInTheDocument();
   expect(alert).toContainElement(repeatedMessage);
-  expect(repeatedMessage.parentElement).toHaveFocus();
+  expect(field).toHaveFocus();
 });
 
 it("does not move focus to a stale error on mount or an unrelated rerender", () => {
