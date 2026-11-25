@@ -56,7 +56,7 @@ export function shouldPersistQuery(query: Query): boolean {
   return defaultShouldDehydrateQuery(query) && query.meta?.persist === true;
 }
 
-export interface PersistOptionsInput {
+export interface ScopedQueryCacheInput {
   appVersion: string;
   /** Account id, or SIGNED_OUT_SCOPE. */
   scope: string;
@@ -65,46 +65,103 @@ export interface PersistOptionsInput {
   throttleTime?: number;
 }
 
-export function createPersistOptions({
+export interface ScopedQueryCache {
+  scope: string;
+  /** For PersistQueryClientProvider / persistQueryClient. */
+  persistOptions: Omit<PersistQueryClientOptions, "queryClient">;
+  /**
+   * Stops all further writes for this scope (writes the persister has queued
+   * become no-ops) and resolves once writes already in flight have settled.
+   * Idempotent.
+   */
+  retire(): Promise<void>;
+  /**
+   * Sign-out: retires the scope, drops the in-memory cache and deletes the
+   * persisted copy. Nothing queued before or during the call can recreate it.
+   */
+  clear(queryClient: QueryClient): Promise<void>;
+}
+
+/** Retirements still draining; pruning waits for them before deleting. */
+const pendingRetirements = new Set<Promise<void>>();
+
+export function createScopedQueryCache({
   appVersion,
   scope,
   storage = AsyncStorage,
   throttleTime,
-}: PersistOptionsInput): Omit<PersistQueryClientOptions, "queryClient"> {
+}: ScopedQueryCacheInput): ScopedQueryCache {
+  const key = queryCacheStorageKey(scope);
+  const inFlight = new Set<Promise<unknown>>();
+  let retirement: Promise<void> | undefined;
+
+  function track<T>(operation: Promise<T>): Promise<T> {
+    inFlight.add(operation);
+    operation.then(
+      () => inFlight.delete(operation),
+      () => inFlight.delete(operation),
+    );
+    return operation;
+  }
+
+  // The persister only ever writes through this wrapper.
+  const guardedStorage: Storage = {
+    getItem: (k) => storage.getItem(k),
+    setItem: (k, value) =>
+      retirement
+        ? Promise.resolve()
+        : track(Promise.resolve(storage.setItem(k, value))),
+    removeItem: (k) => track(Promise.resolve(storage.removeItem(k))),
+  };
+
+  function retire(): Promise<void> {
+    if (!retirement) {
+      const drained = Promise.allSettled([...inFlight]).then(() => undefined);
+      retirement = drained;
+      pendingRetirements.add(drained);
+      drained.then(() => pendingRetirements.delete(drained));
+    }
+    return retirement;
+  }
+
   return {
-    persister: createAsyncStoragePersister({
-      storage,
-      key: queryCacheStorageKey(scope),
-      ...(throttleTime === undefined ? {} : { throttleTime }),
-    }),
-    maxAge: CACHE_MAX_AGE_MS,
-    // A new app version (or a cache written for another scope) is discarded
-    // instead of being read.
-    buster: `${appVersion}|${scope}`,
-    dehydrateOptions: {
-      shouldDehydrateQuery: shouldPersistQuery,
-      // Mutations are never written to disk: their variables can hold
-      // passwords or other input that must not sit in plaintext storage.
-      shouldDehydrateMutation: () => false,
+    scope,
+    persistOptions: {
+      persister: createAsyncStoragePersister({
+        storage: guardedStorage,
+        key,
+        ...(throttleTime === undefined ? {} : { throttleTime }),
+      }),
+      maxAge: CACHE_MAX_AGE_MS,
+      // A new app version (or a cache written for another scope) is discarded
+      // instead of being read.
+      buster: `${appVersion}|${scope}`,
+      dehydrateOptions: {
+        shouldDehydrateQuery: shouldPersistQuery,
+        // Mutations are never written to disk: their variables can hold
+        // passwords or other input that must not sit in plaintext storage.
+        shouldDehydrateMutation: () => false,
+      },
+    },
+    retire,
+    async clear(queryClient) {
+      await retire();
+      queryClient.clear();
+      await storage.removeItem(key);
     },
   };
 }
 
-/** For sign-out: drops the in-memory cache and deletes the scope's persisted copy. */
-export async function clearQueryCache(
-  queryClient: QueryClient,
-  scope: string,
-  storage: Storage = AsyncStorage,
-): Promise<void> {
-  queryClient.clear();
-  await storage.removeItem(queryCacheStorageKey(scope));
-}
-
-/** Deletes persisted caches of every scope except `keepScope` (e.g. a previous account's). */
+/**
+ * Deletes persisted caches of every scope except `keepScope` (e.g. a previous
+ * account's). Waits for retiring scopes to drain first, so a retired scope's
+ * in-flight write can't land after its entry was deleted.
+ */
 export async function pruneOtherQueryCaches(
   keepScope: string,
   storage: PrunableStorage = AsyncStorage,
 ): Promise<void> {
+  await Promise.allSettled([...pendingRetirements]);
   const keep = queryCacheStorageKey(keepScope);
   const stale = (await storage.getAllKeys()).filter(
     (key) => key.startsWith(STORAGE_KEY_PREFIX) && key !== keep,
