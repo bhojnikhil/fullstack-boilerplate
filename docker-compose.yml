@@ -1,4 +1,4 @@
-# Local development stack: postgres, api (hot reload), web.
+# Local development stack: postgres, api (hot reload), web, mailpit.
 # `make up` starts it; see docker-compose.smoke.yml for the as-packaged check.
 services:
   postgres:
@@ -27,13 +27,19 @@ services:
       ENV: development
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
       CORS_ORIGINS: '["http://localhost:${WEB_PORT:-3000}"]'
-      FRONTEND_URL: http://localhost:${WEB_PORT:-3000}
-      GOOGLE_REDIRECT_URI: http://localhost:${API_PORT:-8000}/v1/auth/google/callback
+      # Links in emails open the web app.
+      WEB_URL: http://localhost:${WEB_PORT:-3000}
+      # Outgoing email is captured by Mailpit: http://localhost:${MAILPIT_UI_PORT:-8025}
+      EMAIL_BACKEND: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     volumes:
       - ./apps/api:/app
 
@@ -51,9 +57,16 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${API_PORT:-8000}}
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     depends_on:
       - api
+
+  # Local SMTP server and inbox UI. Nothing is delivered to real addresses.
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
 
 volumes:
   postgres_data:

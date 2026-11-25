@@ -18,6 +18,58 @@ else:
     raise AssertionError("Non-probe route accepted the loopback Host")
 PY
 
+# Sign-up to sign-in in production mode: the verification email goes over SMTP to
+# Mailpit, and the web sign-in sets a Secure, httpOnly, SameSite=Strict refresh cookie.
+docker compose exec -T api python - <<'PY'
+import json
+import os
+import re
+import time
+import uuid
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+email = f"smoke-{uuid.uuid4().hex[:12]}@example.com"
+password = "smoke-test-password-123"
+origin = json.loads(os.environ["CORS_ORIGINS"])[0]
+
+
+def call(path, body, headers=None):
+    request = Request(
+        f"http://127.0.0.1:8000{path}",
+        method="POST",
+        data=json.dumps(body).encode(),
+        headers={"Host": "api.example.com", "Content-Type": "application/json", **(headers or {})},
+    )
+    with urlopen(request, timeout=5) as response:
+        return response.status, response.headers, response.read()
+
+
+assert call("/v1/auth/register", {"email": email, "password": password, "name": "Smoke"})[0] == 202
+for _ in range(50):
+    with urlopen(f"http://mailpit:8025/api/v1/search?query={quote('to:' + email)}", timeout=2) as r:
+        messages = json.load(r)["messages"]
+    if messages:
+        break
+    time.sleep(0.2)
+else:
+    raise AssertionError("The verification email did not reach Mailpit")
+with urlopen(f"http://mailpit:8025/api/v1/message/{messages[0]['ID']}", timeout=2) as r:
+    text = json.load(r)["Text"]
+token = re.search(r"https://web\.example\.com/auth/verify-email#token=([\w-]+)", text).group(1)
+assert call("/v1/auth/verify-email", {"token": token})[0] == 204
+
+status, headers, body = call(
+    "/v1/auth/login",
+    {"email": email, "password": password},
+    {"X-Platform": "web", "Origin": origin},
+)
+assert status == 200 and json.loads(body)["user"]["email_verified"] is True
+refresh = next(c for c in headers.get_all("Set-Cookie") if c.startswith("refresh_token="))
+for attribute in ("httponly", "secure", "samesite=strict", "path=/v1/auth/refresh"):
+    assert attribute in refresh.lower(), refresh
+PY
+
 docker compose logs --no-color --no-log-prefix api | docker compose exec -T api python -c '
 import json
 import sys
@@ -43,4 +95,16 @@ if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [[ "$output" != *SECRET_KEY* 
     exit 1
 fi
 
-echo "api: verified production HSTS, trusted hosts, JSON logs and missing-secret startup rejection"
+# Every other production setting present, but no access-token signing key.
+status=0
+run_args+=(--env "SECRET_KEY=$(openssl rand -hex 32)" --env EMAIL_BACKEND=smtp
+    --env WEB_URL=https://web.example.com)
+output=$(docker run "${run_args[@]}" --entrypoint sh "$image" -ec \
+    'exec timeout 10s uvicorn app.main:app --no-access-log' 2>&1) || status=$?
+if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [[ "$output" != *JWT_SECRET_KEY* ]]; then
+    echo "Packaged API did not reject a missing JWT_SECRET_KEY (exit $status)" >&2
+    exit 1
+fi
+
+echo "api: verified production HSTS, trusted hosts, sign-up email over SMTP, secure refresh" \
+    "cookie, JSON logs and missing-secret startup rejection"
