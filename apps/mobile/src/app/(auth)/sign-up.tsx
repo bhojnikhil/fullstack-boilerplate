@@ -18,7 +18,11 @@ export default function SignUp() {
   const [password, setPassword] = useState("");
 
   // Android back (and header back / iOS swipe) asks before discarding input.
-  useDiscardChangesGuard(name !== "" || email !== "" || password !== "");
+  useDiscardChangesGuard(name !== "" || email !== "" || password !== "", () => {
+    setName("");
+    setEmail("");
+    setPassword("");
+  });
 
   return (
     <Screen edges={["bottom", "left", "right"]}>

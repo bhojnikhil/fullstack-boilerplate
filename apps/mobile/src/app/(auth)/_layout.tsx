@@ -1,5 +1,9 @@
 import { Stack } from "expo-router";
 
+// Opening /sign-up directly (e.g. from a deep link) still puts sign-in
+// underneath it, so back goes to sign-in instead of leaving the app.
+export const unstable_settings = { anchor: "sign-in" };
+
 export default function AuthLayout() {
   return (
     <Stack>
