@@ -11,7 +11,10 @@ apps/api/
   app/main.py            FastAPI app, router registration, app-wide services (app.state)
   app/core/              settings, request session, errors, middleware, health, security
                          primitives, rate limiter, audit log, client info
-  app/integrations/      email (backends + templates), Google ID tokens, Pwned Passwords
+  app/integrations/      email (backends + templates), Expo push, S3 storage, Google ID tokens,
+                         Pwned Passwords
+  app/jobs/              Postgres job queue, handlers, periodic purge, worker (python -m app.jobs)
+  app/modules/devices/   push token registration, sending and receipt processing
   app/modules/auth/      accounts, sessions, tokens, Google sign-in, /v1/auth and /v1/me
   app/modules/items/     user-scoped CRUD example
   alembic/               database migrations
@@ -52,7 +55,7 @@ scripts/                 template customization and container checks
 7. Add tests in `apps/api/tests`. Use the real Postgres fixtures for DB functionality and
    `httpx.AsyncClient` for HTTP assertions. The items module demonstrates keyset pagination
    and idempotent mutation responses. `tests/conftest.py` has `sign_in`/`bearer` helpers
-   that create real sessions, plus `outbox` (sent emails) and `google` (fake verifier).
+   that create real sessions, plus `outbox` (sent emails; the `client` runs the worker after every request, use `job_context` for the queue and fake push) and `google` (fake verifier).
 
 Conventions added with the auth redesign:
 
@@ -63,8 +66,11 @@ Conventions added with the auth redesign:
   survive the request's rollback. Add rules next to the module that uses them.
 - Record security-relevant events with `app.core.audit.record_event`. Never put tokens,
   passwords, email addresses or IPs in `details`; use `keyed_digest` when correlation helps.
-- Send email with the request-scoped `Mailer` (`app.integrations.email.Mail`). It sends after
-  the response, which only happens after a successful commit.
+- Send email with the request-scoped `Mailer` (`app.integrations.email.Mail`). It enqueues a
+  `send_email` job in the request's transaction; the worker sends it after commit, with
+  retries. Enqueue other work with `app.jobs.queue.enqueue(db, kind, payload)` and register
+  the handler in `app/jobs/handlers.py`. Never put secrets in payloads or log their contents.
+- `AppVersionGate` (`app/core/appversion.py`) 426s old mobile clients; `/v1/meta` is exempt.
 - Store opaque tokens as `token_digest` (SHA-256); compare secrets with
   `constant_time_equals`. Expiry times are computed and compared with the application
   clock, not the database's `now()`.
@@ -95,7 +101,7 @@ Conventions added with the auth redesign:
 - The API defaults to `ENV=production` and requires an explicit signing key and database URL
   in test, staging and production; staging and production also require `JWT_SECRET_KEY`,
   SMTP email, Postgres rate limiting and an `https` `WEB_URL`. Compose development sets
-  `ENV=development`, sends email to Mailpit and publishes every port only on IPv4 loopback.
+  `ENV=development`, sends email to Mailpit through the worker and publishes every port only on IPv4 loopback.
 - The container probes `/health` for liveness. Both probes bypass the host allowlist.
   `/ready` rejects an unreachable, unmigrated or behind database. An unknown revision is
   accepted with a warning that names the unknown IDs once per set per process. Migration
