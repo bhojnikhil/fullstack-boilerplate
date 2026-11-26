@@ -11,7 +11,7 @@ export function workspaceApi(api: AppServices["api"]) {
       const items: components["schemas"]["WorkspaceResponse"][] = [];
       let cursor: string | null = null;
       do {
-        const page = await unwrap(
+        const page: components["schemas"]["WorkspacePage"] = await unwrap(
           api.GET("/v1/workspaces", { params: { query: { cursor } } }),
         );
         items.push(...page.items);
@@ -43,7 +43,7 @@ export function workspaceApi(api: AppServices["api"]) {
       const items: components["schemas"]["MemberResponse"][] = [];
       let cursor: string | null = null;
       do {
-        const page = await unwrap(
+        const page: components["schemas"]["MemberPage"] = await unwrap(
           api.GET("/v1/workspaces/{workspace_id}/members", {
             params: { ...path(id), query: { cursor } },
           }),
@@ -77,7 +77,7 @@ export function workspaceApi(api: AppServices["api"]) {
       const items: components["schemas"]["InvitationResponse"][] = [];
       let cursor: string | null = null;
       do {
-        const page = await unwrap(
+        const page: components["schemas"]["InvitationPage"] = await unwrap(
           api.GET("/v1/workspaces/{workspace_id}/invitations", {
             params: { ...path(id), query: { cursor } },
           }),

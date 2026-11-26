@@ -44,6 +44,7 @@ export interface AppServices {
   workspaceId: ValueStore<string | null>;
   /** Set when the API answered 426: the app is too old to continue. */
   updateRequired: ValueStore<UpdateRequired | null>;
+  removedWorkspace: ValueStore<string | null>;
 }
 
 export interface AppServicesOptions {
@@ -56,8 +57,33 @@ export interface AppServicesOptions {
 export function createAppServices(options: AppServicesOptions): AppServices {
   const send = options.fetch ?? ((...args) => globalThis.fetch(...args));
   const updateRequired = createValueStore<UpdateRequired | null>(null);
+  const workspaceId = createValueStore<string | null>(null);
+  const removedWorkspace = createValueStore<string | null>(null);
   const wrappedSend: typeof globalThis.fetch = async (input, init) => {
-    const response = await send(input, init);
+    const request = new Request(input, init);
+    const requestedWorkspace = request.headers.get("X-Workspace-Id");
+    const response = await send(request);
+    if (
+      response.status === 404 &&
+      request.headers.get("Authorization") ===
+        `Bearer ${session.getState().accessToken}` &&
+      requestedWorkspace &&
+      workspaceId.get() === requestedWorkspace
+    ) {
+      try {
+        const body = (await response.clone().json()) as { error?: { code?: string } };
+        const match = new URL(request.url).pathname.match(/^\/v1\/workspaces\/([^/]+)/);
+        if (
+          body.error?.code === "workspace_not_found" &&
+          (!match || decodeURIComponent(match[1]) === requestedWorkspace)
+        ) {
+          workspaceId.set(null);
+          removedWorkspace.set(requestedWorkspace);
+        }
+      } catch {
+        /* Non-JSON error. */
+      }
+    }
     if (response.status === 426) {
       let minVersion: string | null = null;
       try {
@@ -81,8 +107,6 @@ export function createAppServices(options: AppServicesOptions): AppServices {
       fetch: wrappedSend,
     }),
   });
-  const workspaceId = createValueStore<string | null>(null);
-
   const api = createApiClient({
     baseUrl: options.baseUrl,
     requestId: uuid,
@@ -95,7 +119,7 @@ export function createAppServices(options: AppServicesOptions): AppServices {
     refresh: (expected) => session.refresh(expected),
     fetch: wrappedSend,
   });
-  return { api, session, workspaceId, updateRequired };
+  return { api, session, workspaceId, updateRequired, removedWorkspace };
 }
 
 let shared: AppServices | undefined;
