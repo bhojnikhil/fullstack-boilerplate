@@ -25,7 +25,10 @@ jobs:
 
     env:
       ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+      # The API and the tests connect as a non-owner role (row-level security applies to
+      # it); migrations and test seeding run as the owner. The role is created below.
+      DATABASE_URL: postgresql://app_user:app_user@localhost:5432/test_db
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
     services:
       postgres:
         image: postgres:16.16-alpine
@@ -54,6 +57,14 @@ jobs:
 
       - name: Install dependencies (locked)
         run: uv sync --locked
+
+      - name: Create the non-owner application role
+        env:
+          PGPASSWORD: postgres
+        run: >
+          psql -h localhost -U postgres -d test_db -v ON_ERROR_STOP=1
+          -v app_role=app_user -v app_password=app_user
+          -f ../../scripts/db/bootstrap-app-role.sql
 
       - name: Lint (ruff check)
         run: uv run --locked ruff check .
