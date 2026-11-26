@@ -9,9 +9,29 @@ import {
 import path from "node:path";
 import { Alert, type AlertButton } from "react-native";
 
+import type { AppServices } from "../src/lib/app-services";
+import { makeServices } from "../test-utils/services";
+
 const APP_DIR = path.resolve(__dirname, "../src/app");
 
+// The app's service singleton is replaced per test (the mock- prefix lets the
+// hoisted factory read it).
+const mockHolder: { services?: AppServices } = {};
+jest.mock("@/lib/app-services", () => ({
+  ...jest.requireActual("@/lib/app-services"),
+  getAppServices: () => mockHolder.services,
+}));
+
+function signedOut() {
+  mockHolder.services = makeServices(undefined, null).services;
+}
+function signedIn() {
+  mockHolder.services = makeServices().services;
+}
+
 describe("routing", () => {
+  beforeEach(signedOut);
+
   it("starts at sign-in", async () => {
     await renderRouter(APP_DIR, { initialUrl: "/" });
     expect(screen).toHavePathname("/sign-in");
@@ -31,23 +51,38 @@ describe("routing", () => {
     expect(screen).toHavePathname("/sign-up");
   });
 
-  it("opens the tabs from the placeholder link", async () => {
-    await renderRouter(APP_DIR, { initialUrl: "/sign-in" });
-    await fireEvent.press(
-      await screen.findByRole("button", { name: "Preview app screens" }),
-    );
+  it("keeps signed-out users out of the app screens", async () => {
+    await renderRouter(APP_DIR, { initialUrl: "/items" });
+    expect(
+      await screen.findByRole("header", { name: "Welcome back" }),
+    ).toBeOnTheScreen();
+    expect(screen).toHavePathname("/sign-in");
+  });
+
+  it("opens the items tab for a stored session", async () => {
+    signedIn();
+    await renderRouter(APP_DIR, { initialUrl: "/" });
     expect(await screen.findByText("No items yet")).toBeOnTheScreen();
     expect(screen).toHavePathname("/items");
-    expect(screen).toHaveSegments(["(app)", "items"]);
+    expect(screen).toHaveSegments(["(app)", "(tabs)", "items"]);
   });
 
   it("switches tabs to settings", async () => {
+    signedIn();
     await renderRouter(APP_DIR, { initialUrl: "/items" });
     await fireEvent.press(await screen.findByLabelText("Settings"));
     expect(
       await screen.findByRole("header", { name: "About this build" }),
     ).toBeOnTheScreen();
     expect(screen).toHavePathname("/settings");
+  });
+
+  it("serves the email-link routes whether or not anyone is signed in", async () => {
+    await renderRouter(APP_DIR, { initialUrl: "/auth/verify-email?token=abc" });
+    expect(
+      await screen.findByRole("header", { name: "Verify your email" }),
+    ).toBeOnTheScreen();
+    expect(screen).toHavePathname("/auth/verify-email");
   });
 
   it("shows the not-found screen for unknown routes", async () => {
