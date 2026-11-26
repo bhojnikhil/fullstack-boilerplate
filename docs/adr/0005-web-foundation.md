@@ -29,6 +29,12 @@ documents used to open supported links in mobile apps.
   `X-Frame-Options: DENY`, send `nosniff` and `strict-origin-when-cross-origin`, and
   disable the `X-Powered-By` header. Phase 10 deployment configuration will set HSTS at
   the TLS-terminating proxy.
+- Google Identity Services loads `https://accounts.google.com/gsi/client` and uses
+  Google-hosted frames and connections. A restrictive CSP must allow
+  `https://accounts.google.com/gsi/` for `script-src`, `frame-src`, and
+  `connect-src`, and `https://accounts.google.com/gsi/style` for `style-src`.
+  Google ID token authentication currently does not implement a nonce; the API
+  does not expose a nonce challenge.
 - Serve association JSON from explicit App Router handlers using runtime environment
   variables. The same standalone image can serve different mobile app IDs. Return
   404 for missing or malformed settings and cache successful responses for an hour.

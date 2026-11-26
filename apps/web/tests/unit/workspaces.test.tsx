@@ -48,3 +48,36 @@ it("creates and selects a workspace before opening its members", async () => {
   expect(mocks.setActiveWorkspace).toHaveBeenCalledWith("w1");
   await waitFor(() => expect(mocks.members).toHaveBeenCalledWith("w1"));
 });
+
+it("discards members from a workspace after switching", async () => {
+  let resolveFirst!: (value: unknown) => void;
+  mocks.workspaces.mockResolvedValue({
+    items: [
+      { id: "w1", name: "First", role: "member" },
+      { id: "w2", name: "Second", role: "member" },
+    ],
+    next_cursor: null,
+  });
+  mocks.members.mockImplementation((id: string) =>
+    id === "w1"
+      ? new Promise((resolve) => {
+          resolveFirst = resolve;
+        })
+      : Promise.resolve({
+          items: [{ user_id: "b", name: "Second member", role: "member" }],
+          next_cursor: null,
+        }),
+  );
+  render(<WorkspacesPage />);
+  fireEvent.click(await screen.findByRole("button", { name: "Switch to First" }));
+  await waitFor(() => expect(mocks.members).toHaveBeenCalledWith("w1"));
+  fireEvent.click(screen.getByRole("button", { name: "Switch to Second" }));
+  await screen.findByText(/Second member/);
+  resolveFirst({
+    items: [{ user_id: "a", name: "Stale member", role: "member" }],
+    next_cursor: null,
+  });
+  await waitFor(() =>
+    expect(screen.queryByText(/Stale member/)).not.toBeInTheDocument(),
+  );
+});

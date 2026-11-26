@@ -16,7 +16,10 @@ export default function InvitePage() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
-    if (token) savePendingInvite(token);
+    if (token) {
+      savePendingInvite(token);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
   }, []);
   async function accept() {
     const token =

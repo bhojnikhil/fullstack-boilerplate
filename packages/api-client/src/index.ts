@@ -59,7 +59,7 @@ export function createApiClient(options: ClientOptions) {
     // Credential endpoints either establish, rotate, or explicitly revoke a session.
     // Authenticated session-management calls still need the normal refresh path.
     const credentialPath =
-      /(?:^|\/)v1\/auth\/(?:login|register|refresh|google(?:\/link)?|verify-email(?:\/resend)?|password\/(?:forgot|reset)|email\/confirm|logout)\/?$/.test(
+      /(?:^|\/)v1\/auth\/(?:login|register|refresh|google|verify-email(?:\/resend)?|password\/(?:forgot|reset)|email\/confirm|logout)\/?$/.test(
         path,
       );
     set("X-Workspace-Id", options.getWorkspaceId?.());
