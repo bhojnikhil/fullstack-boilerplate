@@ -3,8 +3,8 @@
 # Tools (override if needed, e.g. `make test UV=/path/to/uv`).
 UV ?= uv
 PNPM ?= pnpm
-COMPOSE ?= docker compose
 PRE_COMMIT ?= pre-commit
+COMPOSE ?= docker compose
 
 API_DIR := apps/api
 # Host-side Python commands (tests, migrations) talk to the compose Postgres.

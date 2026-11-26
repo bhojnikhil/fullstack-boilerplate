@@ -119,7 +119,7 @@ API contract because phase 5 is not merged yet (see below).
   `mailpit` (SMTP on 1025, inbox UI on 8025). The API sends its email to Mailpit.
 - `apps/api/.dockerignore` and `apps/web/Dockerfile.dockerignore` keep env files, keys
   and local DBs (at any depth) out of images.
-- GitHub Actions (`.github/workflows/ci.yml` and `mobile.yml`), with every third-party
+- GitHub Actions (`.github/workflows/ci.yml`, which calls `mobile.yml`), with every third-party
   action pinned to a commit SHA:
   - **api**: locked uv install, Ruff lint and format, strict mypy, Alembic upgrade and
     drift check, and pytest on Postgres 16 with a 96.0% branch-aware coverage gate.
@@ -138,11 +138,16 @@ API contract because phase 5 is not merged yet (see below).
     responses and one-hour cache headers from both association URLs. It checks security
     headers and the runtime values in the privacy and account deletion pages. The API and
     web must run as unprivileged users with no mounts. Locally use `make smoke`.
-  - **mobile** (`mobile.yml`, only when `apps/mobile`, `packages`, the lockfile or root
+  - **mobile** (`mobile.yml`, called by `ci.yml` only when `apps/mobile`, `packages`, the lockfile or root
     JS config change): Prettier check, `tsc`, ESLint, Jest and `expo-doctor`, each as
     its own step.
 - Dependabot groups weekly updates for uv, pnpm, Dockerfiles, Compose and GitHub Actions.
-- `.github/workflows/deploy.yml` is a manual placeholder. **Nothing is deployed.**
+- Deploy and release workflows (`deploy.yml`, `mobile-release.yml`, `neon-preview.yml`)
+  skip with a notice when their secrets are absent. **Nothing has been deployed or
+  released from this repository**; see [docs/deploy.md](docs/deploy.md).
+- CI is path-filtered: a `changes` job decides which of api, web, mobile, scripts and
+  docker run, and the `CI gate` job (the check to require in branch protection) fails
+  if any of them failed. Security and Pre-commit are separate workflows that always run.
 
 ## Quick start (Docker)
 
