@@ -1,6 +1,6 @@
 """Workspaces (tenants), their members and invitations.
 
-Every table here is a tenant table with row-level security (migration 0004).
+Every table here is a tenant table with row-level security (migration 0005).
 
 One owner per workspace is enforced by the database, not just the service:
 

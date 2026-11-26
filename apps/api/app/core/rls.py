@@ -1,6 +1,6 @@
 """Per-transaction session variables read by the row-level security policies.
 
-Tenant tables carry policies (see ``alembic/versions/0004_workspaces_rls.py``) that
+Tenant tables carry policies (see ``alembic/versions/0005_workspaces_rls.py``) that
 compare rows with three settings:
 
 - ``app.user_id``: the signed-in user, set by the authentication dependency;

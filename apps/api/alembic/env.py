@@ -11,7 +11,9 @@ from app.core.idempotency import IdempotencyRecord  # noqa: F401
 from app.core.logging import configure_logging
 from app.core.models import Base
 from app.core.ratelimit import RateLimitWindow  # noqa: F401
+from app.jobs.models import Job  # noqa: F401
 from app.modules.auth.models import User  # noqa: F401
+from app.modules.devices.models import Device, PushTicket  # noqa: F401
 from app.modules.items.models import Item  # noqa: F401
 from app.modules.workspaces.models import Invitation, Membership, Workspace  # noqa: F401
 

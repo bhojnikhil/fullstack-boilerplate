@@ -6,12 +6,12 @@
 --        -v app_role=app_user -v app_password='...' -f scripts/db/bootstrap-app-role.sql
 --
 -- The role must not own tables and must not be a superuser or have BYPASSRLS:
--- row-level security (migration 0004) only protects tenant data from roles it applies to.
+-- row-level security (migration 0005) only protects tenant data from roles it applies to.
 -- Migrations run as the owner (MIGRATION_DATABASE_URL) and grant this role its table
 -- access. `make db-bootstrap` runs this against the Compose database with a dev password.
 --
 -- Not for production secrets on a shared shell: the password appears in the process list.
--- Use your host's role management there (see docs/adr/0011-workspaces-and-rls.md).
+-- Use your host's role management there (see docs/adr/0015-workspaces-and-rls.md).
 
 SELECT format(
     'CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',

@@ -9,7 +9,8 @@ from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from starlette.exceptions import HTTPException
 
-from app.core import API_PREFIX, health
+from app.core import API_PREFIX, appversion, health
+from app.core.appversion import APP_VERSION_HEADER, AppVersionGate
 from app.core.client import PLATFORM_HEADER
 from app.core.config import Settings
 from app.core.db import SessionFactory
@@ -30,13 +31,15 @@ from app.core.middleware import (
     RequestContextMiddleware,
     TrustedHostEnvelopeMiddleware,
 )
+from app.core.observability import init_sentry
 from app.core.ratelimit import RateLimiter, build_rate_limit_backend
-from app.integrations.email import build_email_backend
 from app.integrations.google_id_token import GoogleIdTokenVerifier
 from app.integrations.pwned_passwords import BreachedPasswordChecker
+from app.integrations.storage import build_storage
 from app.modules.auth import router as auth
 from app.modules.auth.cookies import CSRF_HEADER
 from app.modules.auth.deletion import AccountDeletionHook
+from app.modules.devices import router as devices
 from app.modules.items import router as items
 from app.modules.workspaces import router as workspaces
 from app.modules.workspaces.deletion import WorkspaceDeletionHook
@@ -103,7 +106,7 @@ def create_app(
     app.state.rate_limiter = RateLimiter(
         build_rate_limit_backend(config, rate_limit_sessions or sessions), config
     )
-    app.state.email_backend = build_email_backend(config)
+    app.state.storage = build_storage(config)
     app.state.google_verifier = (
         GoogleIdTokenVerifier(config.google_client_ids) if config.google_auth_enabled else None
     )
@@ -113,6 +116,8 @@ def create_app(
     app.state.account_deletion_hooks = deletion_hooks
 
     configure_logging(config.env)
+    init_sentry(config, "api")
+    app.add_middleware(AppVersionGate, minimum=config.min_supported_app_version)
     app.add_middleware(BodyLimitMiddleware, limit=config.max_request_body_bytes)
     app.add_middleware(ErrorMiddleware)
     app.add_middleware(
@@ -124,11 +129,11 @@ def create_app(
             "Authorization",
             "Content-Type",
             "Idempotency-Key",
-            "X-Workspace-Id",
+            WORKSPACE_HEADER,
             "X-App-Version",
             REQUEST_ID,
             PLATFORM_HEADER,
-            WORKSPACE_HEADER,
+            APP_VERSION_HEADER,
             CSRF_HEADER,
         ],
         expose_headers=[REQUEST_ID],
@@ -144,6 +149,8 @@ def create_app(
     api.include_router(workspaces.router)
     api.include_router(workspaces.invitations_router)
     api.include_router(items.router)
+    api.include_router(devices.router)
+    api.include_router(appversion.router)
     app.include_router(api)
     app.include_router(health.router)
 

@@ -1,7 +1,7 @@
 """workspaces, memberships, invitations, workspace-scoped items and row-level security
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0005
+Revises: 0004
 Create Date: 2026-11-25 09:00:00.000000
 
 - Adds workspaces, memberships and invitations. One owner per workspace is enforced by
@@ -30,8 +30,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0004"
-down_revision = "0003"
+revision = "0005"
+down_revision = "0004"
 branch_labels = None
 depends_on = None
 

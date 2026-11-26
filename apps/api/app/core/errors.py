@@ -56,6 +56,8 @@ class ErrorCode(StrEnum):
     INVALID_IDEMPOTENCY_KEY = "invalid_idempotency_key"
     IDEMPOTENCY_MISMATCH = "idempotency_mismatch"
     IDEMPOTENCY_IN_PROGRESS = "idempotency_in_progress"
+    APP_UPDATE_REQUIRED = "app_update_required"
+    UPLOAD_NOT_ALLOWED = "upload_not_allowed"
 
 
 class DomainError(Exception):
@@ -155,6 +157,8 @@ DOMAIN_ERRORS = {
     ErrorCode.INVALID_IDEMPOTENCY_KEY: (422, "Invalid idempotency key"),
     ErrorCode.IDEMPOTENCY_MISMATCH: (422, "Idempotency key was used for a different request"),
     ErrorCode.IDEMPOTENCY_IN_PROGRESS: (409, "A request with this idempotency key is in progress"),
+    ErrorCode.APP_UPDATE_REQUIRED: (426, "Update the app to continue"),
+    ErrorCode.UPLOAD_NOT_ALLOWED: (422, "This upload is not allowed"),
 }
 
 

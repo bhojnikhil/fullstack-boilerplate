@@ -52,6 +52,8 @@ class AuditEventType(StrEnum):
     INVITATION_CREATED = "invitation_created"
     INVITATION_ACCEPTED = "invitation_accepted"
     INVITATION_REVOKED = "invitation_revoked"
+    # A push token registered by another user moved to the caller (details: previous owner).
+    DEVICE_TOKEN_REASSIGNED = "device_token_reassigned"
 
 
 class AuditEvent(Base, UUIDMixin):
