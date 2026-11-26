@@ -7,7 +7,9 @@ import "@/components/google-sign-in";
 export function GoogleReauthenticate({ onVerified }: { onVerified: () => void }) {
   const button = useRef<HTMLDivElement>(null);
   const verified = useRef(onVerified);
-  verified.current = onVerified;
+  useEffect(() => {
+    verified.current = onVerified;
+  }, [onVerified]);
   const [error, setError] = useState("");
   useEffect(() => {
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;

@@ -128,6 +128,27 @@ export default function WorkspacesPage() {
     };
   }, [user, restoreSession, router]);
   useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (!event.key?.startsWith("workspace:")) return;
+      const id = getActiveWorkspace();
+      if (id === selectedRef.current) return;
+      selectedRef.current = "";
+      setSelected("");
+      setMembers([]);
+      setMemberCursor(null);
+      setInvitations([]);
+      setInvitationCursor(null);
+      setLink("");
+      setQr("");
+      setRename("");
+      setTransferTo("");
+      setOwnershipPassword("");
+      setVerified(false);
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  useEffect(() => {
     if (!selected || !active) return;
     let alive = true;
     void api

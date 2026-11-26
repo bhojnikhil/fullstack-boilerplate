@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { ApiClient } from "@/lib/api";
+import { ApiClient, getActiveWorkspace, setActiveWorkspace } from "@/lib/api";
 import { createApiClient } from "@repo/api-client";
 
 afterEach(() => {
@@ -214,7 +214,6 @@ it("silently restores a session after reload when the first request returns 401"
   expect(calls).toBe(2);
 });
 it("keeps workspace selection scoped to the signed-in account", async () => {
-  const { setActiveWorkspace } = await import("@/lib/api");
   let account = "a";
   const workspaceHeaders: (string | null)[] = [];
   vi.stubGlobal(
@@ -232,7 +231,7 @@ it("keeps workspace selection scoped to the signed-in account", async () => {
   await client.getItems("workspace-a");
   account = "b";
   await client.login("b@example.com", "password");
-  expect((await import("@/lib/api")).getActiveWorkspace()).toBeNull();
+  expect(getActiveWorkspace()).toBeNull();
   await client.getItems("workspace-b");
   expect(workspaceHeaders).toEqual(["workspace-a", "workspace-b"]);
 });
