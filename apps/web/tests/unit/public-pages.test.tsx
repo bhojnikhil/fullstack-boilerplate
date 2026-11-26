@@ -66,7 +66,7 @@ it("shows in-app guidance and a usable email link for requests without the app",
   render(<AccountDeletionPage />);
   expect(screen.getByText("Template.", { exact: true })).toBeVisible();
   expect(screen.getByText(/your Acme App account/)).toBeVisible();
-  expect(screen.getByText(/\[Add the in-app steps/)).toBeVisible();
+  expect(screen.getByText(/Sign in, open Account/)).toBeVisible();
   expect(
     screen.getByRole("heading", { name: "Data deleted or retained" }),
   ).toBeVisible();

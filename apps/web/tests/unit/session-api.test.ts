@@ -211,3 +211,25 @@ it("silently restores a session after reload when the first request returns 401"
   expect((await new FreshClient().getCurrentUser()).id).toBe("a");
   expect(calls).toBe(2);
 });
+it("keeps workspace selection scoped to the signed-in account", async () => {
+  const { setActiveWorkspace } = await import("@/lib/api");
+  let account = "a";
+  const workspaceHeaders: (string | null)[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (request: Request) => {
+      if (request.url.endsWith("/v1/auth/login"))
+        return json(tokens(account, "session"));
+      workspaceHeaders.push(request.headers.get("X-Workspace-Id"));
+      return json({ items: [], next_cursor: null });
+    }),
+  );
+  const client = new ApiClient();
+  await client.login("a@example.com", "password");
+  setActiveWorkspace("workspace-a");
+  await client.getItems();
+  account = "b";
+  await client.login("b@example.com", "password");
+  await client.getItems();
+  expect(workspaceHeaders).toEqual(["workspace-a", null]);
+});

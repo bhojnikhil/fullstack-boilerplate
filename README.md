@@ -9,13 +9,11 @@ Compose, and is tested in GitHub Actions.
 > **Not production-ready yet.** A v2 upgrade (multi-tenancy, background jobs, mobile app,
 > web rebuild, real deploys) is in progress as a series of PRs. Gaps in the current code:
 >
-> - The web app has email verification, but the forgot-password, reset-password and
->   confirm-email pages are planned for phase 8b. Until then, post those emailed tokens
->   to the API (see [Authentication](#authentication)).
 > - Email is sent by an in-process task after the response. A crash or SMTP outage at that
 >   moment loses the message; a durable job queue with retries is planned.
 > - Expired sessions, refresh tokens, emailed tokens and rate-limit rows are not purged yet.
-> - The web app has no Google sign-in button yet (the API endpoint exists).
+> - Email changes and account deletion in the web UI currently require a password;
+>   Google-only accounts need a password recovery flow before using these actions.
 
 ## Repository layout
 
@@ -64,12 +62,14 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 - Next.js 16 (App Router), React 19, TypeScript 6 (`strict`), extending the shared
   config in `packages/config`.
 - Public pages at `/`, `/privacy`, `/terms`, and `/account-deletion`. Sign-in, registration
-  and sample items at `/auth/login`, `/auth/register`, and `/items`.
+  recovery and verification at `/auth/*`, workspace management at `/workspaces`,
+  invitations at `/invite`, account management at `/account`, and items at `/items`.
 - Tailwind CSS 4 and shadcn/ui button, input and label components. The site theme follows
   the operating system by default and remembers an explicit light or dark selection.
 - Android App Links and Apple Universal Links association documents at `/.well-known/`.
-- Vitest with React Testing Library and a Playwright Chromium smoke suite for the public site.
-- axios API client (`lib/api.ts`) that keeps the access token in memory, refreshes it
+- Vitest with React Testing Library and Playwright Chromium smoke suites for public pages
+  and the compose-backed account and workspace flow.
+- Generated API client (`packages/api-client`, wrapped by `lib/api.ts`) that keeps the access token in memory, refreshes it
   silently with the httpOnly refresh cookie and CSRF token (one refresh at a time across
   tabs where the Web Locks API exists), and sends `X-Platform: web`. Zustand auth store
   (`lib/auth-store.ts`).
@@ -321,6 +321,7 @@ See [ADR 0004](docs/adr/0004-async-postgres.md).
 | Variable                           | Default                                                                   | Notes                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `NEXT_PUBLIC_API_URL`              | `http://localhost:8000`                                                   | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image.                                                                       |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Unset | Optional Google Identity Services web client ID, inlined at build time. Configure the corresponding API Google client ID and authorized browser origins. |
 | `WEB_LEGAL_APP_NAME`               | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates.                                                                                                                                                                                                                 |
 | `WEB_LEGAL_DOMAIN`                 | `[Site domain]` placeholder                                               | Domain shown in the privacy and terms templates.                                                                                                                                                                                                                                                                 |
 | `WEB_SUPPORT_EMAIL`                | Unset                                                                     | Monitored mailbox for deletion requests sent from `/account-deletion`.                                                                                                                                                                                                                                           |

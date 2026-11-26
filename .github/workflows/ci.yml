@@ -178,6 +178,27 @@ jobs:
         id: playwright
         run: pnpm --filter web test:e2e
 
+      - name: Compose-backed account and workspace smoke
+        env:
+          COMPOSE_PROJECT_NAME: web-e2e
+          API_PORT: 18080
+          WEB_PORT: 13000
+          POSTGRES_PORT: 15432
+          MAILPIT_UI_PORT: 18025
+          MAILPIT_SMTP_PORT: 11025
+          PLAYWRIGHT_STACK_URL: http://localhost:13000
+          MAILPIT_URL: http://localhost:18025
+        run: |
+          make migrate-compose
+          docker compose up -d --build --wait
+          pnpm --filter web exec playwright test tests/e2e/stack.spec.ts
+
+      - name: Stop web e2e stack
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: web-e2e
+        run: docker compose down -v
+
       - name: Upload Playwright failure artifacts
         if: failure() && steps.playwright.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

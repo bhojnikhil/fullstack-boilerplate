@@ -56,6 +56,15 @@ function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
     return navigator.locks.request("auth-refresh", task);
   return task();
 }
+export function getActiveWorkspace(): string | null {
+  const userId = identity?.split(":")[0];
+  return userId ? (storage()?.getItem(`workspace:${userId}`) ?? null) : null;
+}
+export function setActiveWorkspace(id: string) {
+  const userId = identity?.split(":")[0];
+  if (!userId) throw new Error("Sign in before selecting a workspace.");
+  storage()?.setItem(`workspace:${userId}`, id);
+}
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -74,6 +83,7 @@ export class ApiClient {
     credentials: "include",
     platform: "web",
     getAccessToken: () => accessToken,
+    getWorkspaceId: () => getActiveWorkspace(),
     getSessionId: () => identity,
     refresh: async (expected) => !!(await this.refresh(expected)),
     onSessionChanged: changedSession,
@@ -206,6 +216,63 @@ export class ApiClient {
       unwrap(await this.client.POST("/v1/auth/logout"));
     }
     endSession();
+  }
+  workspaces(cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces", { params: { query: { cursor } } })
+      .then(unwrap);
+  }
+  createWorkspace(name: string) {
+    return this.client
+      .POST("/v1/workspaces", { body: { name, currency: "USD", timezone: "UTC" } })
+      .then(unwrap);
+  }
+  members(workspace_id: string, cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}/members", {
+        params: { path: { workspace_id }, query: { cursor } },
+      })
+      .then(unwrap);
+  }
+  changeRole(workspace_id: string, user_id: string, role: "admin" | "member") {
+    return this.client
+      .PATCH("/v1/workspaces/{workspace_id}/members/{user_id}", {
+        params: { path: { workspace_id, user_id } },
+        body: { role },
+      })
+      .then(unwrap);
+  }
+  removeMember(workspace_id: string, user_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}/members/{user_id}", {
+        params: { path: { workspace_id, user_id } },
+      })
+      .then(unwrap);
+  }
+  invitations(workspace_id: string, cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}/invitations", {
+        params: { path: { workspace_id }, query: { cursor } },
+      })
+      .then(unwrap);
+  }
+  createInvitation(workspace_id: string, role: "admin" | "member", email?: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/invitations", {
+        params: { path: { workspace_id } },
+        body: { role, email: email || null },
+      })
+      .then(unwrap);
+  }
+  revokeInvitation(workspace_id: string, invitation_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}/invitations/{invitation_id}", {
+        params: { path: { workspace_id, invitation_id } },
+      })
+      .then(unwrap);
+  }
+  acceptInvitation(token: string) {
+    return this.client.POST("/v1/invitations/accept", { body: { token } }).then(unwrap);
   }
   getCurrentUser() {
     return this.client.GET("/v1/me").then(unwrap);

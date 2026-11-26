@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
-import { api, type Item } from "@/lib/api";
+import { api, getActiveWorkspace, type Item } from "@/lib/api";
 import { FormError, TextField } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -50,6 +50,10 @@ export default function ItemsPage() {
       return;
     }
 
+    if (!getActiveWorkspace()) {
+      router.push("/workspaces");
+      return;
+    }
     // The existing loader sets its loading state before each request.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadItems();
