@@ -3,6 +3,7 @@
 # Tools (override if needed, e.g. `make test UV=/path/to/uv`).
 UV ?= uv
 PNPM ?= pnpm
+PRE_COMMIT ?= pre-commit
 COMPOSE ?= docker compose
 
 API_DIR := apps/api
@@ -26,10 +27,10 @@ CYAN := \033[0;36m
 GREEN := \033[0;32m
 NC := \033[0m
 
-.PHONY: help setup dev up down logs ps build fresh smoke \
+.PHONY: help setup hooks dev up down logs ps build fresh smoke \
 	migrate migrate-compose migration db-shell db-bootstrap \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
-	fmt fmt-check build-web mobile test-mobile doctor-mobile
+	fmt fmt-check build-web mobile test-mobile doctor-mobile gen-client
 
 help: ## Show this help message
 	@printf "$(GREEN)Available commands:$(NC)\n"
@@ -40,6 +41,9 @@ help: ## Show this help message
 setup: ## Install API (uv) and JS (pnpm) dependencies from the lockfiles
 	cd $(API_DIR) && $(UV) sync --locked
 	$(PNPM) install --frozen-lockfile
+
+hooks: ## Install the pre-commit Git hook
+	$(PRE_COMMIT) install --install-hooks
 
 dev: migrate-compose ## postgres + api in Docker (hot reload), web dev server on the host
 	$(COMPOSE) up -d --wait api
@@ -156,3 +160,7 @@ mobile: ## Start the Expo dev server for apps/mobile
 
 build-web: ## Production build of the web app (via Turborepo)
 	$(PNPM) turbo run build
+
+
+gen-client: ## Export OpenAPI and regenerate the TypeScript client
+	UV="$(UV)" ./scripts/gen-client.sh

@@ -6,6 +6,7 @@
 !pnpm-workspace.yaml
 !apps/web
 !packages/config
+!packages/api-client
 
 # --- Secrets (mirrors the root .gitignore) ----------------------------------
 **/.env

@@ -17,12 +17,14 @@ WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY packages/config/package.json packages/config/
+COPY packages/api-client/package.json packages/api-client/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile --store-dir /pnpm-store --filter web...
 
 # ---------------------------------------------------------------------------
 FROM deps AS builder
 COPY packages/config packages/config
+COPY packages/api-client packages/api-client
 COPY apps/web apps/web
 # NEXT_PUBLIC_* values are inlined into the bundle by `next build`, so the
 # public API URL must be provided at build time. It must be reachable from the

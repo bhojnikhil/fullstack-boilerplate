@@ -19,6 +19,9 @@
     "typecheck": {
       "dependsOn": ["^typecheck"]
     },
+    "web#build": {
+      "dependsOn": ["^build", "web#typecheck"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

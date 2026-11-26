@@ -1,4 +1,4 @@
-import { isAxiosError } from "axios";
+import { ApiError } from "./api";
 import { create } from "zustand";
 import { api, type User } from "./api";
 
@@ -9,10 +9,10 @@ interface ErrorEnvelope {
 // Mirrors the API's limits for new passwords (see the OpenAPI schema).
 const PASSWORD_HINT = "Use a password of 12 to 128 characters.";
 
-/** The API's error message from an axios error, if it has one. */
+/** The API's error message from an API error, if it has one. */
 function errorDetail(error: unknown, fallback: string): string {
-  if (isAxiosError<ErrorEnvelope>(error)) {
-    const body = error.response?.data?.error;
+  if (error instanceof ApiError) {
+    const body = (error.body as ErrorEnvelope)?.error;
     const fields = body?.details?.fields ?? [];
     if (fields.some((field) => field.location?.at(-1) === "password"))
       return PASSWORD_HINT;

@@ -1,0 +1,130 @@
+name: Mobile release
+
+# Manual only. Builds with EAS (and optionally submits to Google Play internal testing),
+# or publishes an EAS Update with `pnpm release:update`. Skips with a notice when
+# EXPO_TOKEN is absent. Uses the repo's pinned eas-cli (`pnpm exec eas`), never @latest.
+# Nothing here has been run against a real Expo account: see docs/deploy.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: build = EAS Build (Android); update = EAS Update (OTA JS)
+        type: choice
+        options: [build, update]
+        default: build
+      profile:
+        description: eas.json build profile / EAS Update target
+        type: choice
+        options: [preview, production]
+        default: preview
+      submit:
+        description: build only, production profile only. Submit the AAB to Play internal testing
+        type: boolean
+        default: false
+      message:
+        description: update only. EAS Update message
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-release-${{ inputs.profile }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: ${{ inputs.action }} (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # preview -> staging, production -> production (GitHub Environments hold the variables).
+    environment: ${{ inputs.profile == 'production' && 'production' || 'staging' }}
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      # app.config.ts is evaluated on this runner from the shell's environment (EAS CLI
+      # does not read .env). The next step exports the rest from the GitHub Environment's
+      # variables: keep them in sync with the EAS environment of the same name.
+      APP_VARIANT: ${{ inputs.profile }}
+    steps:
+      - id: gate
+        env:
+          ACTION: ${{ inputs.action }}
+          PROFILE: ${{ inputs.profile }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping the mobile release: set the EXPO_TOKEN secret on this environment."
+          elif [ "$SUBMIT" = true ] && { [ "$ACTION" != build ] || [ "$PROFILE" != production ]; }; then
+            echo "::error::submit applies only to action=build with profile=production."
+            exit 1
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          cache: true
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - if: steps.gate.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # Only non-empty variables are exported, so app.config.ts applies its defaults
+      # (or its own validation error) instead of choking on empty strings.
+      - name: Export app settings
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          API_URL: ${{ vars.API_URL }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+          APP_NAME: ${{ vars.APP_NAME }}
+          APP_SLUG: ${{ vars.APP_SLUG }}
+          ANDROID_PACKAGE: ${{ vars.ANDROID_PACKAGE }}
+          IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+          APP_SCHEME: ${{ vars.APP_SCHEME }}
+          APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+          APP_LINK_PATHS: ${{ vars.APP_LINK_PATHS }}
+        run: |
+          for v in API_URL EAS_PROJECT_ID EXPO_OWNER APP_NAME APP_SLUG ANDROID_PACKAGE IOS_BUNDLE_ID APP_SCHEME APP_DOMAIN APP_LINK_PATHS; do
+            value="${!v}"
+            case "$value" in *$'\n'*|*$'\r'*) echo "::error::$v must be a single line."; exit 1 ;; esac
+            [ -z "$value" ] || printf '%s=%s\n' "$v" "$value" >> "$GITHUB_ENV"
+          done
+
+      - name: EAS Build
+        if: steps.gate.outputs.enabled == 'true' && inputs.action == 'build'
+        working-directory: apps/mobile
+        env:
+          SUBMIT: ${{ inputs.submit }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          args=(build --profile "$PROFILE" --platform android --non-interactive)
+          # Submits with the eas.json "production" submit profile (Play internal track).
+          if [ "$SUBMIT" = true ]; then args+=(--auto-submit); fi
+          pnpm exec eas "${args[@]}"
+
+      - name: EAS Update
+        if: steps.gate.outputs.enabled == 'true' && inputs.action == 'update'
+        working-directory: apps/mobile
+        env:
+          PROFILE: ${{ inputs.profile }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          set -euo pipefail
+          [ -n "$MESSAGE" ] || MESSAGE="Update from GitHub Actions run ${GITHUB_RUN_ID}"
+          pnpm release:update "$PROFILE" --message "$MESSAGE"
