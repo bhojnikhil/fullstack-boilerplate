@@ -1,20 +1,153 @@
-name: Deploy (placeholder)
+name: Deploy
 
-# No deployment is implemented yet. This workflow used to run on every push to
-# main and report a green "Deploy" while only echoing text, which was misleading.
-# It is now manual-only and says plainly that nothing is deployed. A real deploy
-# workflow (that skips cleanly when secrets are absent) replaces it in a later phase.
+# Staging deploys after CI succeeds on main; production only by a manual run that
+# GitHub Environment protection rules can gate. Every job checks for its secrets
+# first and skips with a notice when they are absent, so a fresh fork stays green.
+# Nothing in this repository has been deployed: see docs/deploy.md.
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
 
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-${{ inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+# Third-party actions are pinned to full commit SHAs (tag in the comment).
+
 jobs:
-  deploy:
+  # Only deploy a main push whose CI passed (not a PR run that happens to be named main).
+  guard:
+    name: guard
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
     steps:
-      - name: Nothing to deploy
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+          CI_RESULT: ${{ github.event.workflow_run.conclusion }}
         run: |
-          echo "::notice::No deployment is configured for this repository yet. Nothing was deployed."
+          if [ "$EVENT" = workflow_dispatch ] || { [ "$CI_EVENT" = push ] && [ "$CI_RESULT" = success ]; }; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not deploying: CI did not succeed on a push to main."
+          fi
+
+  api:
+    name: api + worker (Fly.io)
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    steps:
+      - id: gate
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ] || [ -z "$FLY_APP" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping the API deploy: set the FLY_API_TOKEN secret and the FLY_APP variable on this environment."
+          elif ! printf '%s' "$FLY_APP" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
+            echo "::error::FLY_APP must be a Fly app name (lowercase letters, digits, hyphens)."
+            exit 1
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # v1.5
+        with:
+          version: "0.5.10"
+
+      # release_command (apps/api/fly.toml) runs `alembic upgrade head` as the owner
+      # role before the new release takes traffic; a failed migration aborts the deploy.
+      - name: Deploy
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: apps/api
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP }}
+        run: flyctl deploy --remote-only --config fly.toml --app "$FLY_APP"
+
+      - name: Check the deployed API
+        if: steps.gate.outputs.enabled == 'true' && vars.API_URL != ''
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 6 --retry-all-errors "${API_URL%/}/ready"
+
+  web:
+    name: web (Vercel)
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      # Staging is a Vercel preview deployment; production is a production one.
+      VERCEL_ENV: ${{ (inputs.environment || 'staging') == 'production' && 'production' || 'preview' }}
+      VERCEL_PROD_FLAG: ${{ (inputs.environment || 'staging') == 'production' && '--prod' || '' }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping the web deploy: set the VERCEL_TOKEN secret and the VERCEL_ORG_ID and VERCEL_PROJECT_ID variables on this environment."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          cache: true
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # Build locally with the project's Vercel settings (root directory apps/web), then
+      # upload the prebuilt output. NEXT_PUBLIC_* values come from the Vercel project's
+      # environment variables (they are inlined at build time).
+      - name: Pull Vercel settings
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm dlx vercel@65.16.0 pull --yes --environment="$VERCEL_ENV" --token="$VERCEL_TOKEN"
+
+      - name: Build
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm dlx vercel@65.16.0 build $VERCEL_PROD_FLAG --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm dlx vercel@65.16.0 deploy --prebuilt $VERCEL_PROD_FLAG --token="$VERCEL_TOKEN"
