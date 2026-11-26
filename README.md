@@ -12,8 +12,7 @@ Compose, and is tested in GitHub Actions.
 > - Email, push and cleanup need the `worker` process (`python -m app.jobs`) to be running;
 >   without it, messages wait in the `jobs` table. Real Resend/SMTP delivery, Expo push and
 >   S3/R2 presigned URLs have not been exercised against the live services.
-> - Email changes and account deletion in the web UI currently require a password;
->   Google-only accounts need a password recovery flow before using these actions.
+> - Real Google sign-in and reauthentication have not been exercised against the live service.
 
 ## Repository layout
 
