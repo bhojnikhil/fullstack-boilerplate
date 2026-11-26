@@ -44,6 +44,8 @@ async def handle_send_email(ctx: JobContext, job_id: uuid.UUID, payload: dict[st
 
 async def handle_send_push(ctx: JobContext, job_id: uuid.UUID, payload: dict[str, object]) -> None:
     data = payload.get("data")
+    ids = payload.get("device_ids")
+    attempt = payload.get("attempt")
     accepted = await send_push(
         ctx.sessions,
         ctx.push,
@@ -51,6 +53,8 @@ async def handle_send_push(ctx: JobContext, job_id: uuid.UUID, payload: dict[str
         str(payload["title"]),
         str(payload["body"]),
         data if isinstance(data, dict) else {},
+        device_ids=[uuid.UUID(str(i)) for i in ids] if isinstance(ids, list) else None,
+        attempt=attempt if isinstance(attempt, int) else 0,
     )
     log.info("push_sent", accepted=accepted)
 
@@ -65,7 +69,7 @@ async def handle_process_receipts(
 async def handle_purge_expired(
     ctx: JobContext, job_id: uuid.UUID, payload: dict[str, object]
 ) -> None:
-    await purge_expired(ctx.sessions)
+    await purge_expired(ctx.sessions, ctx.config.job_retention_days)
 
 
 HANDLERS: dict[str, Handler] = {

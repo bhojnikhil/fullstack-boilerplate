@@ -3643,7 +3643,7 @@
     "/v1/meta": {
       "get": {
         "description": "Version information for clients; no authentication.",
-        "operationId": "meta_get_meta",
+        "operationId": "meta_get",
         "responses": {
           "200": {
             "content": {
@@ -3696,7 +3696,7 @@
             "description": "Internal Server Error"
           }
         },
-        "summary": "Get Meta",
+        "summary": "Get",
         "tags": ["meta"]
       }
     }

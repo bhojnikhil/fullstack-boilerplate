@@ -116,12 +116,15 @@ class Settings(DatabaseSettings):
     resend_api_key: SecretStr = SecretStr("")
     resend_timeout_seconds: float = Field(default=10, gt=0, le=60)
 
-    # Background jobs (the worker process; see docs/adr/0011-postgres-job-queue.md).
+    # Background jobs (the worker process; see docs/adr/0013-postgres-job-queue.md).
     job_poll_interval_seconds: float = Field(default=2, gt=0, le=60)
     worker_concurrency: int = Field(default=4, ge=1, le=64)
     # A job claimed longer ago than this is presumed lost with its worker and is re-run.
     # Handlers are cancelled after JOB_TIMEOUT_SECONDS, which must be shorter.
     job_lock_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    # Jobs older than this are deleted whatever their state, so payloads (which can hold
+    # one-time links) do not accumulate.
+    job_retention_days: int = Field(default=3, ge=1, le=90)
     job_timeout_seconds: int = Field(default=120, ge=5, le=3000)
 
     # Expo push notifications. "log" only logs counts (never tokens or message text).
@@ -152,6 +155,8 @@ class Settings(DatabaseSettings):
     # Error reporting. Without a DSN Sentry is not initialised at all.
     sentry_dsn: SecretStr | None = None
     sentry_release: str = ""
+    # Exception messages can contain personal data; by default only the type is sent.
+    sentry_include_exception_messages: bool = False
     sentry_traces_sample_rate: float = Field(default=0, ge=0, le=1)
 
     rate_limit_backend: Literal["postgres", "memory"] = "postgres"

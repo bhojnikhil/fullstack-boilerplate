@@ -68,7 +68,7 @@ async def run_one(ctx: JobContext, handlers: Mapping[str, Handler] = HANDLERS) -
         if outcome == JobStatus.DEAD:
             log.error("job_dead", kind=job.kind, job_id=str(job.id))
     else:
-        await queue.succeed(ctx.sessions, job.id)
+        await queue.succeed(ctx.sessions, job)
     return True
 
 

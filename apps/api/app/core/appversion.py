@@ -33,10 +33,11 @@ def parse_version(value: str) -> Version | None:
 class AppVersionGate:
     """Rejects ios/android clients whose X-App-Version is below the configured minimum.
 
-    The web app and clients that do not identify as mobile are never gated. A mobile
-    client that sends no (or an unparseable) version is let through: the gate is a
-    courtesy for old builds, not authentication. ``/v1/meta`` stays reachable so a
-    blocked client can read the minimum and the latest version.
+    The web app and clients that do not identify as mobile are never gated. A client that
+    identifies as ios/android but sends no, or a malformed, ``X-App-Version`` is treated as
+    below the minimum (builds that predate the header must update too). ``/v1/meta``, the
+    health probes (outside ``/v1``) and CORS preflights stay reachable. With the default
+    minimum ``0.0.0`` nobody is gated.
     """
 
     def __init__(self, app: ASGIApp, minimum: str) -> None:
@@ -65,7 +66,7 @@ class AppVersionGate:
         if headers.get(PLATFORM_HEADER, "").strip().lower() not in MOBILE_PLATFORMS:
             return False
         version = parse_version(headers.get(APP_VERSION_HEADER, ""))
-        return version is not None and version < self.minimum
+        return version is None or version < self.minimum
 
 
 class Meta(BaseModel):
@@ -77,7 +78,7 @@ router = APIRouter(tags=["meta"])
 
 
 @router.get(META_PATH)
-async def get_meta(config: Annotated[Settings, Depends(get_settings)]) -> Meta:
+async def get(config: Annotated[Settings, Depends(get_settings)]) -> Meta:
     """Version information for clients; no authentication."""
     return Meta(
         min_supported_app_version=config.min_supported_app_version,

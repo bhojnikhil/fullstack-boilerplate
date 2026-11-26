@@ -8,7 +8,7 @@ import sentry_sdk
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.core.observability import init_sentry, scrub_event
+from app.core.observability import init_sentry, make_scrubber, redact, scrub_event
 from app.integrations.email import (
     Email,
     EmailDeliveryError,
@@ -343,7 +343,24 @@ def test_scrub_event_drops_request_user_and_local_variables():
     }
 
 
-def test_a_real_sentry_client_reports_errors_without_personal_data():
+SENSITIVE = (
+    "could not insert (person@example.com, $2b$12$abcdefghijklmnopqrstuuAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)"
+    " Authorization: Bearer abc.def.ghi eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl"
+    " https://web.example.com/auth/reset?token=s3cr3t#token=other"
+    " 0123456789abcdef0123456789abcdef01234567 QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoxMjM0NTY3ODkw"
+)
+LEAKS = (
+    "person@example.com",
+    "abc.def.ghi",
+    "eyJhbGci",
+    "s3cr3t",
+    "other",
+    "0123456789abcdef",
+    "QUJDREVG",
+)
+
+
+def capture_sentry_events(config, service, raise_error):
     from sentry_sdk.transport import Transport
 
     events = []
@@ -354,24 +371,72 @@ def test_a_real_sentry_client_reports_errors_without_personal_data():
                 if item.type == "event":
                     events.append(item.payload.json)
 
-    config = settings(sentry_dsn="https://public@o0.ingest.sentry.io/1", sentry_release="api@1.2.3")
     try:
-        init_sentry(config, "api")
+        init_sentry(config, service)
         client = sentry_sdk.get_client()
         client.transport = Capture({})
         client.options["transport"] = client.transport
-        password = "-".join(["hunter", "2"])  # built at runtime: only a frame variable holds it
         try:
-            raise ValueError(password[:0] + "bad input")
-        except ValueError:
+            raise_error()
+        except Exception:
             sentry_sdk.capture_exception()
         sentry_sdk.flush()
     finally:
         sentry_sdk.get_client().close()
-    [event] = events
+    return events
+
+
+def fail_with_sensitive_text():
+    password = "-".join(["hunter", "2"])  # built at runtime: only a frame variable holds it
+    raise ValueError(SENSITIVE + password[:0])
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_a_real_sentry_client_reports_errors_without_personal_data(service):
+    config = settings(sentry_dsn="https://public@o0.ingest.sentry.io/1", sentry_release="api@1.2.3")
+    [event] = capture_sentry_events(config, service, fail_with_sensitive_text)
     assert (event["release"], event["environment"]) == ("api@1.2.3", "test")
-    assert event["tags"]["service"] == "api"
+    assert event["tags"]["service"] == service
     assert "request" not in event and "user" not in event
-    frames = event["exception"]["values"][0]["stacktrace"]["frames"]
-    assert all("vars" not in frame for frame in frames)
-    assert "hunter2" not in json.dumps(event)
+    [exception] = event["exception"]["values"]
+    # By default the message is not sent at all, only the exception type.
+    assert exception["type"] == "ValueError" and "value" not in exception
+    assert all("vars" not in frame for frame in exception["stacktrace"]["frames"])
+    dumped = json.dumps(event)
+    assert "hunter-2" not in dumped
+    for leak in LEAKS:
+        assert leak not in dumped
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_exception_messages_are_redacted_when_explicitly_included(service):
+    config = settings(
+        sentry_dsn="https://public@o0.ingest.sentry.io/1", sentry_include_exception_messages=True
+    )
+    [event] = capture_sentry_events(config, service, fail_with_sensitive_text)
+    [exception] = event["exception"]["values"]
+    assert exception["value"].startswith("could not insert (")
+    for leak in LEAKS:
+        assert leak not in json.dumps(event)
+
+
+def test_log_messages_are_redacted():
+    scrub = make_scrubber(False)
+    event = scrub(
+        {
+            "logentry": {"message": "sent to person@example.com", "params": ["person@example.com"]},
+            "message": "token https://x.example/a?code=s3cr3t",
+            "breadcrumbs": [{"message": "m"}],
+        },
+        {},
+    )
+    assert event == {
+        "logentry": {"message": "sent to [redacted]"},
+        "message": "token [redacted]",
+    }
+
+
+def test_redact_keeps_ordinary_text():
+    assert redact("connection refused (port 5432) while sending email") == (
+        "connection refused (port 5432) while sending email"
+    )

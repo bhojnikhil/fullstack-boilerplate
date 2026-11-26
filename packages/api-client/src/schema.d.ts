@@ -482,10 +482,10 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Get Meta
+     * Get
      * @description Version information for clients; no authentication.
      */
-    get: operations["meta_get_meta"];
+    get: operations["meta_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -3218,7 +3218,7 @@ export interface operations {
       };
     };
   };
-  meta_get_meta: {
+  meta_get: {
     parameters: {
       query?: never;
       header?: never;

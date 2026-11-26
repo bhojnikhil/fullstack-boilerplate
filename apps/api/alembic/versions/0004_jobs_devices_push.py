@@ -4,7 +4,7 @@ Revision ID: 0004
 Revises: 0003
 Create Date: 2026-11-25 12:00:00
 
-Adds ``jobs`` (the Postgres-backed queue, see docs/adr/0011-postgres-job-queue.md),
+Adds ``jobs`` (the Postgres-backed queue, see docs/adr/0013-postgres-job-queue.md),
 ``devices`` (Expo push tokens, unique per token) and ``push_tickets`` (receipts still to
 be checked). All three are new tables, so the previous release keeps working unchanged.
 """
@@ -34,6 +34,7 @@ def upgrade() -> None:
             "run_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
         ),
         sa.Column("locked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("lease_token", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("dedupe_key", sa.String(length=128), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column(
@@ -94,6 +95,7 @@ def upgrade() -> None:
         "push_tickets",
         sa.Column("ticket_id", sa.String(length=64), nullable=False),
         sa.Column("device_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("message", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
