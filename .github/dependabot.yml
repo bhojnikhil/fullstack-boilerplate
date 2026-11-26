@@ -1,37 +1,65 @@
 version: 2
+# Monthly, grouped, and no automatic major-version jumps: majors (and anything Expo pins,
+# such as react, react-native or async-storage) are upgraded deliberately by hand.
+# Security updates are separate: GitHub opens those immediately regardless of this schedule.
 updates:
   - package-ecosystem: uv
     directory: /apps/api
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       pnpm-workspace:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Versions of these are chosen by the Expo SDK (see docs/adr, mobile toolchain).
+      - dependency-name: "expo*"
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-native*"
+      - dependency-name: "@react-native-async-storage/async-storage"
+      - dependency-name: "@react-native-community/netinfo"
   - package-ecosystem: docker
     directories: ["/apps/api", "/apps/web"]
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       docker-images:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker-compose
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
     groups:
       compose-images:
         patterns: ["*"]
+    ignore:
+      # Postgres major upgrades are a deliberate, tested migration.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       actions:
         patterns: ["*"]
