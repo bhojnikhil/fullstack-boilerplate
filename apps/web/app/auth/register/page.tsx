@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { GoogleSignIn } from "@/components/google-sign-in";
 import Link from "next/link";
 import { FormError, TextField } from "@/components/form";
 import { Button } from "@/components/ui/button";
@@ -90,6 +91,7 @@ export default function RegisterPage() {
         </form>
       )}
 
+      <GoogleSignIn />
       <p className="mt-4 text-center text-sm">
         Already have an account?{" "}
         <Link

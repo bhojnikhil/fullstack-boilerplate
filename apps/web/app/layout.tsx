@@ -35,6 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </Link>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                   <nav aria-label="Main navigation" className="flex gap-4 text-sm">
+                    <Link href="/account" className="hover:underline">
+                      Account
+                    </Link>
                     <Link href="/items" className="hover:underline">
                       Items
                     </Link>

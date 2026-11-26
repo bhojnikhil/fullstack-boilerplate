@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { GoogleSignIn } from "@/components/google-sign-in";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { FormError, TextField } from "@/components/form";
@@ -58,6 +59,7 @@ export default function LoginPage() {
         </Button>
       </form>
 
+      <GoogleSignIn />
       <p className="mt-4 text-center text-sm">
         <Link href="/auth/forgot-password" className="underline">
           Forgot password?

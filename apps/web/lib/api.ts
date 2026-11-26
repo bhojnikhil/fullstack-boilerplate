@@ -153,6 +153,46 @@ export class ApiClient {
     startSession(data);
     return data;
   }
+  async googleLogin(idToken: string) {
+    const data = unwrap(
+      await this.authClient.POST("/v1/auth/google", { body: { id_token: idToken } }),
+    );
+    startSession(data);
+    return data;
+  }
+  updateProfile(name: string) {
+    return this.client.PATCH("/v1/me", { body: { name } }).then(unwrap);
+  }
+  reauthenticate(password: string) {
+    return this.client
+      .POST("/v1/auth/reauthenticate", { body: { password } })
+      .then(unwrap);
+  }
+  changePassword(current_password: string, new_password: string) {
+    return this.client
+      .POST("/v1/me/password", { body: { current_password, new_password } })
+      .then(unwrap);
+  }
+  changeEmail(new_email: string) {
+    return this.client.POST("/v1/me/email", { body: { new_email } }).then(unwrap);
+  }
+  async deleteAccount() {
+    unwrap(await this.client.DELETE("/v1/me"));
+    endSession();
+  }
+  sessions(cursor?: string) {
+    return this.client
+      .GET("/v1/auth/sessions", { params: { query: { cursor } } })
+      .then(unwrap);
+  }
+  revokeSession(session_id: string) {
+    return this.client
+      .DELETE("/v1/auth/sessions/{session_id}", { params: { path: { session_id } } })
+      .then(unwrap);
+  }
+  revokeOtherSessions() {
+    return this.client.POST("/v1/auth/sessions/revoke-others").then(unwrap);
+  }
   async logout() {
     const expected = identity;
     if (!accessToken && !(await this.refresh(expected)))
