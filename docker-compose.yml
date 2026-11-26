@@ -2,7 +2,7 @@
 # `make up` starts it; see docker-compose.smoke.yml for the as-packaged check.
 services:
   postgres:
-    image: postgres:16.16-alpine
+    image: postgres:18.7-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
