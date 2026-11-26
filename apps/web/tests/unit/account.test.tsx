@@ -2,10 +2,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import AccountPage from "@/app/account/page";
+import { ApiError } from "@/lib/api";
 const mocks = vi.hoisted(() => ({
   sessions: vi.fn(),
   changePassword: vi.fn(),
   reauthenticate: vi.fn(),
+  deleteAccount: vi.fn(),
   changeEmail: vi.fn(),
   user: {
     id: "u",
@@ -15,7 +17,17 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("@/lib/api", () => ({ api: mocks, ApiError: class extends Error {} }));
+vi.mock("@/lib/api", () => ({
+  api: mocks,
+  ApiError: class extends Error {
+    constructor(
+      public status: number,
+      public body: unknown,
+    ) {
+      super("failed");
+    }
+  },
+}));
 vi.mock("@/lib/auth-store", () => ({
   useAuthStore: Object.assign(() => ({ user: mocks.user, restoreSession: vi.fn() }), {
     setState: vi.fn(),
@@ -77,4 +89,27 @@ it("enables email changes after Google verification for passwordless users", asy
     expect(mocks.changeEmail).toHaveBeenCalledWith("new@example.com"),
   );
   expect(mocks.reauthenticate).toHaveBeenCalledWith({ id_token: "google-token" });
+});
+it("offers the Workspaces link from the error code and details.reason, not the message", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  mocks.reauthenticate.mockResolvedValue({});
+  mocks.deleteAccount.mockRejectedValue(
+    new ApiError(409, {
+      error: {
+        code: "account_deletion_blocked",
+        message: "Some other wording",
+        details: { reason: "sole_workspace_owner" },
+      },
+    }),
+  );
+  render(<AccountPage />);
+  fireEvent.change(screen.getByLabelText("Password to delete account"), {
+    target: { value: "pw" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Delete account" }));
+  expect(await screen.findByText("Some other wording")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Workspaces" })).toHaveAttribute(
+    "href",
+    "/workspaces",
+  );
 });

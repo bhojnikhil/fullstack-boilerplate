@@ -177,6 +177,47 @@ describe("auth flow", () => {
   });
 });
 
+describe("delete account", () => {
+  async function submit(handlers: Handlers) {
+    const harness = boot({ ...defaultHandlers(), ...handlers }, true);
+    await renderRouter(APP_DIR, { initialUrl: "/delete-account" });
+    await fireEvent.changeText(
+      await screen.findByLabelText("Confirm with your password"),
+      "pw",
+    );
+    await fireEvent.press(screen.getByRole("button", { name: "Delete my account" }));
+    return harness;
+  }
+
+  it("offers 'Manage workspaces' from the error code, not the message text", async () => {
+    await submit({
+      "POST /v1/auth/reauthenticate": () => json(204, null),
+      "DELETE /v1/me": () =>
+        apiError(409, "account_deletion_blocked", "Different wording", {
+          reason: "sole_workspace_owner",
+        }),
+    });
+    expect(
+      await screen.findByRole("button", { name: "Manage workspaces" }),
+    ).toBeOnTheScreen();
+  });
+
+  it("does not offer it for other errors, whatever the message says", async () => {
+    const harness = await submit({
+      "POST /v1/auth/reauthenticate": () => json(204, null),
+      "DELETE /v1/me": () =>
+        apiError(500, "internal_error", "Transfer or delete everything"),
+    });
+    await waitFor(() =>
+      expect(harness.requests.some((r) => r.path === "/v1/me")).toBe(true),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Delete my account" }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole("button", { name: "Manage workspaces" })).toBeNull();
+  });
+});
+
 describe("items", () => {
   const server = (id: string, title: string) => ({
     id,

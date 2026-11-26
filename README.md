@@ -5,14 +5,12 @@ A starter monorepo with a **FastAPI** backend (`apps/api`), a **Next.js 16** fro
 uv for Python and pnpm workspaces + Turborepo for JavaScript, runs locally with Docker
 Compose, and is tested in GitHub Actions.
 
-> [!WARNING]
-> **Not production-ready yet.** A v2 upgrade (multi-tenancy, background jobs, mobile app,
-> web rebuild, real deploys) is in progress as a series of PRs. Gaps in the current code:
->
-> - Email, push and cleanup need the `worker` process (`python -m app.jobs`) to be running;
->   without it, messages wait in the `jobs` table. Real Resend/SMTP delivery, Expo push and
->   S3/R2 presigned URLs have not been exercised against the live services.
-> - Real Google sign-in and reauthentication have not been exercised against the live service.
+> [!NOTE]
+> **v2 is feature-complete in the repository but has not been run against real services.**
+> Nothing has been deployed, released or submitted to a store, and no cloud account, token
+> or store listing exists for it. Real Resend/SMTP delivery, Expo push, S3/R2 presigned
+> URLs, real Google sign-in, EAS builds and Play submission have never been exercised. The
+> deploy and release workflows skip until you add their secrets ([docs/deploy.md](docs/deploy.md)).
 
 ## Repository layout
 
@@ -22,11 +20,41 @@ apps/
   web/            Next.js app (pnpm workspace package "web")
   mobile/         Expo (React Native) app (pnpm workspace package "mobile")
 packages/
+  api-client/     generated OpenAPI TypeScript client (@repo/api-client)
   config/         shared TypeScript, ESLint and Prettier config (@repo/config)
-docs/adr/         architecture decision records
+docs/adr/         architecture decision records; docs/deploy.md deploy guide
+AGENTS.md         conventions for contributors and coding agents (CLAUDE.md points to it)
+CHANGELOG.md      release notes
 scripts/          customize.sh and regression tests for repo tooling
 Makefile          single entry point for both Python and JS tasks (`make help`)
 ```
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Web["web (Next.js 16)"] -->|"HTTPS, Bearer + refresh cookie"| API
+  Mobile["mobile (Expo)"] -->|"HTTPS, Bearer + stored refresh token"| API
+  subgraph Server
+    API["api (FastAPI)\nrouter, service, repository"]
+    Worker["worker\npython -m app.jobs"]
+  end
+  API -->|"app role: DATABASE_URL (RLS applies)"| PG[("Postgres")]
+  Worker --> PG
+  Alembic["alembic (release step)"] -->|"owner role: MIGRATION_DATABASE_URL"| PG
+  API -. "enqueue job in the request transaction" .-> PG
+  Worker --> Email["SMTP / Resend / Mailpit"]
+  Worker --> Push["Expo Push API"]
+  API --> Store["S3 / R2 presigned URLs"]
+  Gen["make gen-client"] -->|"openapi.json + schema.d.ts"| Client["packages/api-client"]
+  Client --> Web
+  Client --> Mobile
+```
+
+The API is the only thing that talks to the database for users. Each request runs in one
+transaction (commit after the response is built, rollback on error); jobs are rows in the
+same database, so a rolled-back request sends no email. Web and mobile share one generated
+client; CI fails if it drifts from the API.
 
 ## What's included
 
@@ -89,9 +117,8 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
 
 **Mobile (`apps/mobile`)**: see [Mobile](#mobile). Sign-in and sign-up with email
 verification, email-link screens, native Google sign-in (development build), items with an
-offline write queue, sessions, profile, account deletion, biometric lock and push
-registration. Workspace, members and invitation screens are written against an **assumed**
-API contract because phase 5 is not merged yet (see below).
+offline write queue, workspaces, members and invitations, sessions, profile, account
+deletion, biometric lock and push registration.
 
 - Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
   `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
@@ -99,7 +126,7 @@ API contract because phase 5 is not merged yet (see below).
 - Styling with React Native `StyleSheet` and typed light/dark design tokens
   ([ADR 0006](docs/adr/0006-mobile-styling.md)).
 - `app.config.ts` driven by environment variables, `eas.json` build profiles and EAS
-  Update channels. Nothing has been built with EAS yet.
+  Update channels. Nothing has been built with EAS yet (the release workflow is untested).
 - Jest + React Native Testing Library tests; `expo-doctor` in CI.
 
 **Tooling**
@@ -354,7 +381,7 @@ See [ADR 0004](docs/adr/0004-async-postgres.md).
 | Variable                           | Default                                                                   | Notes                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `NEXT_PUBLIC_API_URL`              | `http://localhost:8000`                                                   | Inlined at **build** time. Must be reachable from the browser. For the Docker image it is a build arg (`--build-arg NEXT_PUBLIC_API_URL=...`; Compose reads it from your shell or a root `.env`); env files are not copied into the image.                                                                       |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Unset | Optional Google Identity Services web client ID, inlined at build time. Configure the corresponding API Google client ID and authorized browser origins. |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`     | Unset                                                                     | Optional Google Identity Services web client ID, inlined at build time. Configure the corresponding API Google client ID and authorized browser origins.                                                                                                                                                         |
 | `WEB_LEGAL_APP_NAME`               | `Full-stack starter` in the shell and `[App name]` in the legal templates | Name shown in the header, landing page, page metadata, and public policy and deletion templates.                                                                                                                                                                                                                 |
 | `WEB_LEGAL_DOMAIN`                 | `[Site domain]` placeholder                                               | Domain shown in the privacy and terms templates.                                                                                                                                                                                                                                                                 |
 | `WEB_SUPPORT_EMAIL`                | Unset                                                                     | Monitored mailbox for deletion requests sent from `/account-deletion`.                                                                                                                                                                                                                                           |
@@ -595,7 +622,7 @@ coarse client label. Failed sign-ins store an email digest, not the address.
 ## Workspaces and tenancy
 
 Design record: [ADR 0016](docs/adr/0016-workspaces-and-rls.md). A workspace is the tenant
-(a household, a team). Users join through memberships with a role of `owner`, `admin` or
+(a team, a family). Users join through memberships with a role of `owner`, `admin` or
 `member`; there is exactly one owner. **Signing up does not create a workspace**: a new
 account has none and the client runs an onboarding step (create one, or accept an
 invitation).
@@ -735,13 +762,11 @@ queue are in [ADR 0015](docs/adr/0015-mobile-session-and-offline-queue.md).
 - **Items.** List with pull-to-refresh, create, edit, delete. Creates and edits go through a
   persisted queue (see ADR 0015) and show at once as "Waiting to sync"; they are replayed
   with their original idempotency keys when the connection returns.
-- **Workspaces, members, invitations** (provisional). The screens exist (switch, create,
-  members, invite link with share sheet and QR code, accept via `/invite/<token>`), but
-  they call endpoints that are not in the generated client yet:
-  `/v1/workspaces`, `/v1/workspaces/{id}/members`, `/v1/workspaces/{id}/invitations`,
-  `/v1/invitations/accept`. The request and response shapes are an assumption taken from the
-  spec and live in `src/features/workspaces/workspace-api.ts`; replace them with typed client
-  calls after phase 5 lands. Until then they are untested against a real server.
+- **Workspaces, members, invitations.** Switch, create, members, invite link with share sheet
+  and QR code, accept via `/invite/<token>`, all through the typed client
+  (`src/features/workspaces/workspace-api.ts`). Deleting an account while solely owning a
+  shared workspace is blocked by the API (`account_deletion_blocked`, `details.reason ==
+sole_workspace_owner`); the delete screen then offers "Manage workspaces".
 - **Biometric lock** (Settings): locks at launch and after 30 s in the background; turning it
   on requires a successful biometric check. It is a UI gate, not encryption.
 - **Push.** A dismissible card on the Items tab (not at launch) asks for permission; once
@@ -942,15 +967,87 @@ pnpm release:update production --message "..."
 Updates also carry the variant's runtime version (`1.0.0-<variant>`), so even an update
 published by hand with the wrong variant is ignored by the other variants' builds.
 
-## Adding a domain entity
+## Adding a new domain module
 
-Use `app/modules/items` as the template. Add the model with a `workspace_id` column, a
-migration that also enables and forces row-level security with a policy (copy the `items`
-one), a repository built on `TenantRepository`, the service, input/output schemas, the router
-(depend on `ActiveWorkspace`) and tests, including an isolation case in
-`tests/test_tenant_isolation.py`; the RLS discovery test fails for a table with a
-`workspace_id` and no forced RLS. Register the
-router in `app/main.py`. [CLAUDE_CONTEXT.md](CLAUDE_CONTEXT.md) describes the conventions.
+Use `apps/api/app/modules/items` as the template; replace `widgets` with your name.
+
+1. **Model**: `app/modules/widgets/models.py` with a UUID primary key, a non-null
+   `workspace_id` foreign key (`ON DELETE CASCADE`), `created_at`/`updated_at` timestamptz,
+   `created_by_id` if you need authorship. Money is integer minor units plus an ISO 4217
+   code; instants are `timestamptz`; calendar dates are `date` in the workspace timezone.
+   Import the model in `alembic/env.py`.
+2. **Migration**: `make migration name=add_widgets`, then edit it by hand to add
+   `ALTER TABLE widgets ENABLE ROW LEVEL SECURITY`, `ALTER TABLE widgets FORCE ROW LEVEL
+SECURITY`, a policy on `workspace_id` that uses the per-transaction `app.workspace_id` and also
+   requires membership (copy the `items` policy in revision 0005), and the grants to the app role. Apply with
+   `make migrate`. `tests/test_rls.py` fails for a table with `workspace_id` and no forced RLS.
+3. **Repository**: extend `app.core.tenancy.TenantRepository`; the constructor takes the
+   workspace id and every query filters on it. Never add an unscoped query for tenant data.
+4. **Service**: business rules in `service.py`; raise `DomainError` with codes defined in
+   `app/core/errors.py`. No HTTP types in services.
+5. **Schemas**: `schemas.py` request models with `extra="forbid"`.
+6. **Router**: `router.py` with a stable tag and handler names (they become OpenAPI operation
+   IDs). Depend on `ActiveWorkspace` (the `X-Workspace-Id` header) or `PathWorkspace` /
+   `require_role("admin", path=True)` for the workspace context and role; use `RequestSession`
+   so everything shares one transaction. Register the router in `app/main.py`.
+7. **Isolation test**: add every new workspace-scoped route to `CASES` in
+   `tests/test_tenant_isolation.py` (that test fails for a route with no case), and write
+   normal service/router tests on the real Postgres fixtures.
+8. **Client**: `make gen-client`, commit `packages/api-client/openapi.json` and `src/schema.d.ts`.
+9. **UI**: a web page under `apps/web/app/` and a mobile screen under `apps/mobile/src/app/`
+   using the typed client (`lib/api.ts` on web, `useServices().api` on mobile), each with a test.
+
+Conventions in full: [AGENTS.md](AGENTS.md).
+
+## Shipping to Google Play
+
+Everything here is a manual step in Google's consoles; nothing in this repository has done
+any of it. Use real values in `ANDROID_PACKAGE` (not `com.example.*`) before the first
+production build; the package name can't change after the first release.
+
+- [ ] **Play Console developer account** (one-time registration fee, identity verification).
+- [ ] **Closed test first, for new personal accounts.** Personal accounts created after
+      November 2023 must run a closed test with **at least 12 testers opted in for 14
+      consecutive days** before applying for production access. Organization accounts are
+      exempt. Check Google's current rules, which change.
+- [ ] **Target API level.** New apps and updates must target the API level Google currently
+      requires (Expo SDK 58 sets a default; confirm the built AAB's target in the Play
+      Console before submitting).
+- [ ] **Play App Signing.** Let Play manage the app signing key. In Play Console → App
+      integrity, copy the **SHA-256 of the app signing certificate** into
+      `ANDROID_SHA256_CERT_FINGERPRINTS` (web env, comma-separated; keep the upload-key
+      fingerprint too if you sideload) so `/.well-known/assetlinks.json` verifies App Links.
+- [ ] **Privacy policy URL**: `https://<your-domain>/privacy` (customize the template text
+      first; `scripts/customize.sh` fills the app name and domain).
+- [ ] **Account deletion URL**: `https://<your-domain>/account-deletion` (set
+      `WEB_SUPPORT_EMAIL`); the in-app path is Settings → Delete account.
+- [ ] **Data safety form** matching what the app collects (email, name, device push token,
+      crash data if `SENTRY_DSN` is set) and your retention (see the audit log and job
+      retention settings).
+- [ ] **Content rating** questionnaire.
+- [ ] **Store listing assets**: app name, short and full description, 512x512 icon,
+      1024x500 feature graphic, phone screenshots, and (for tablets) tablet screenshots.
+- [ ] **Release**: `pnpm exec eas build --profile production --platform android`, then
+      upload the AAB to internal testing (or run the _Mobile release_ workflow with submit).
+      Smoke-test sign-in, deep links (App Links verification) and push on the internal track.
+
+## Deploying
+
+[docs/deploy.md](docs/deploy.md) is the guide: API and worker on Fly.io (process groups;
+`release_command` runs `alembic upgrade head` as the owner role), Neon pooled vs direct
+URLs and optional preview branches, notes for Cloud Run, web on Vercel (Cloudflare Pages
+is possible with an adapter; not provided), GitHub Environments `staging`/`production`.
+`deploy.yml` deploys staging after CI passes on `main` and production manually; every job
+skips with a notice when its secrets are absent. Mobile: `mobile-release.yml` (manual) runs
+`eas build` and optionally `eas submit` to Play internal testing; JavaScript-only changes ship
+with `pnpm release:update <preview|production>` ([EAS builds and updates](#eas-builds-and-updates)).
+
+## Enabling the dependency review job
+
+The `dependency-review` job in `security.yml` needs GitHub's dependency graph. If the
+job reports it skipped or unsupported, turn it on at **Settings → Advanced Security →
+Dependency graph → Enable** (free for public repositories; private ones need GitHub Advanced
+Security), then re-run the workflow.
 
 ## Troubleshooting
 

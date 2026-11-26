@@ -13,9 +13,18 @@ import { useSubmit } from "@/features/auth/use-submit";
 import { ApiError, describeError, unwrap } from "@/lib/api-error";
 import { useServices } from "@/providers/services";
 
+/** The API blocks deletion while the user solely owns a workspace that has other members. */
+function isSoleOwnerBlock(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.code === "account_deletion_blocked" &&
+    error.details.reason === "sole_workspace_owner"
+  );
+}
+
 function describeDeleteError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.code === "account_deletion_blocked") {
+    if (isSoleOwnerBlock(error)) {
       return "You still own a workspace with other members. Transfer or delete it first.";
     }
     if (error.code === "reauthentication_failed")
@@ -30,6 +39,7 @@ export default function DeleteAccount() {
   const { forgetLocally } = useAuthActions();
   const { data: profile } = useProfile();
   const [password, setPassword] = useState("");
+  const [blockedByWorkspace, setBlockedByWorkspace] = useState(false);
   const hasPassword = profile?.sign_in_methods.includes("password") ?? true;
   const useGoogle = !hasPassword && isGoogleSignInAvailable();
 
@@ -39,7 +49,12 @@ export default function DeleteAccount() {
         body: useGoogle ? { id_token: await getGoogleIdToken() } : { password },
       }),
     );
-    await unwrap(api.DELETE("/v1/me"));
+    try {
+      await unwrap(api.DELETE("/v1/me"));
+    } catch (error) {
+      setBlockedByWorkspace(isSoleOwnerBlock(error));
+      throw error;
+    }
     setPassword("");
     await forgetLocally();
   }, describeDeleteError);
@@ -62,7 +77,7 @@ export default function DeleteAccount() {
           />
         ) : null}
         <ErrorText message={remove.error} />
-        {remove.error?.includes("Transfer or delete") ? (
+        {remove.error && blockedByWorkspace ? (
           <Button
             title="Manage workspaces"
             variant="secondary"

@@ -61,16 +61,22 @@ export default function AccountPage() {
     } catch (cause) {
       const envelope =
         cause instanceof ApiError
-          ? (cause.body as { error?: { message?: unknown; code?: string } } | undefined)
-              ?.error
+          ? (
+              cause.body as
+                | { error?: { message?: unknown; code?: string; details?: unknown } }
+                | undefined
+            )?.error
           : undefined;
+      const details = envelope?.details as { reason?: unknown } | undefined;
       setError({
         section,
         message:
           typeof envelope?.message === "string"
             ? envelope.message
             : "The request failed. Check your details and try again.",
-        blocked: envelope?.code === "sole_workspace_owner",
+        blocked:
+          envelope?.code === "account_deletion_blocked" &&
+          details?.reason === "sole_workspace_owner",
       });
       setFailures((n) => n + 1);
     } finally {

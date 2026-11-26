@@ -6,12 +6,12 @@ notice until you add the secrets, so a fresh clone stays green. Treat every
 command here as untested against a real account until you have run it once on
 staging.
 
-| Piece | Default target | Workflow |
-| --- | --- | --- |
-| API (and, once it exists, the worker) | Fly.io, one app, process groups | `.github/workflows/deploy.yml` (`api` job), `apps/api/fly.toml` |
-| Database | Neon Postgres | none; optional per-PR branches in `neon-preview.yml` |
-| Web | Vercel | `deploy.yml` (`web` job) |
-| Mobile | EAS Build / EAS Update, Google Play internal testing | `.github/workflows/mobile-release.yml` |
+| Piece                                 | Default target                                       | Workflow                                                        |
+| ------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------- |
+| API (and, once it exists, the worker) | Fly.io, one app, process groups                      | `.github/workflows/deploy.yml` (`api` job), `apps/api/fly.toml` |
+| Database                              | Neon Postgres                                        | none; optional per-PR branches in `neon-preview.yml`            |
+| Web                                   | Vercel                                               | `deploy.yml` (`web` job)                                        |
+| Mobile                                | EAS Build / EAS Update, Google Play internal testing | `.github/workflows/mobile-release.yml`                          |
 
 ## GitHub Environments
 
@@ -21,18 +21,18 @@ On `production`, add required reviewers (and, if you like, restrict it to the
 variable on the Environment, not the repository, so staging and production can
 differ.
 
-| Name | Kind | Used by | Notes |
-| --- | --- | --- | --- |
-| `FLY_API_TOKEN` | secret | api | Deploy token for the Fly app (`fly tokens create deploy -a <app>`). |
-| `FLY_APP` | variable | api | The Fly app name. |
-| `API_URL` | variable | api, mobile | Public API origin. The deploy job probes `${API_URL}/ready` when it is set. The mobile release also reads it (https required for preview and production). |
-| `VERCEL_TOKEN` | secret | web | |
-| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` | variables | web | From `.vercel/project.json` after `vercel link`. |
-| `EXPO_TOKEN` | secret | mobile | Expo access token. |
-| `EAS_PROJECT_ID`, `EXPO_OWNER` | variables | mobile | From `eas init` (see the mobile README section on EAS). |
-| `APP_NAME`, `APP_SLUG`, `ANDROID_PACKAGE`, `IOS_BUNDLE_ID`, `APP_SCHEME`, `APP_DOMAIN`, `APP_LINK_PATHS` | variables | mobile | Optional app settings read by `app.config.ts`. Production needs real `ANDROID_PACKAGE` and `IOS_BUNDLE_ID`. |
-| `NEON_API_KEY` | secret (repository) | preview DBs | Pull-request workflows cannot read Environment secrets, so this one lives on the repository. |
-| `NEON_PROJECT_ID` | variable (repository) | preview DBs | |
+| Name                                                                                                     | Kind                  | Used by     | Notes                                                                                                                                                     |
+| -------------------------------------------------------------------------------------------------------- | --------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FLY_API_TOKEN`                                                                                          | secret                | api         | Deploy token for the Fly app (`fly tokens create deploy -a <app>`).                                                                                       |
+| `FLY_APP`                                                                                                | variable              | api         | The Fly app name.                                                                                                                                         |
+| `API_URL`                                                                                                | variable              | api, mobile | Public API origin. The deploy job probes `${API_URL}/ready` when it is set. The mobile release also reads it (https required for preview and production). |
+| `VERCEL_TOKEN`                                                                                           | secret                | web         |                                                                                                                                                           |
+| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`                                                                     | variables             | web         | From `.vercel/project.json` after `vercel link`.                                                                                                          |
+| `EXPO_TOKEN`                                                                                             | secret                | mobile      | Expo access token.                                                                                                                                        |
+| `EAS_PROJECT_ID`, `EXPO_OWNER`                                                                           | variables             | mobile      | From `eas init` (see the mobile README section on EAS).                                                                                                   |
+| `APP_NAME`, `APP_SLUG`, `ANDROID_PACKAGE`, `IOS_BUNDLE_ID`, `APP_SCHEME`, `APP_DOMAIN`, `APP_LINK_PATHS` | variables             | mobile      | Optional app settings read by `app.config.ts`. Production needs real `ANDROID_PACKAGE` and `IOS_BUNDLE_ID`.                                               |
+| `NEON_API_KEY`                                                                                           | secret (repository)   | preview DBs | Pull-request workflows cannot read Environment secrets, so this one lives on the repository.                                                              |
+| `NEON_PROJECT_ID`                                                                                        | variable (repository) | preview DBs |                                                                                                                                                           |
 
 `deploy.yml` runs `staging` automatically after CI succeeds on a push to `main`,
 and any environment from **Actions → Deploy → Run workflow**. The mobile release is
@@ -42,10 +42,10 @@ manual only; the `preview` profile uses `staging` and `production` uses `product
 
 `apps/api/fly.toml` describes one Fly app. `[build]` targets the `runtime` stage of
 `apps/api/Dockerfile` (non-root, no build tools). `[processes]` holds the `app`
-group (uvicorn, health-checked on `/health`). The background-jobs worker is a
-second process group in the same app, so it shares secrets and releases: add it as
-`worker = "<command>"` when the worker entrypoint exists (the file has a commented
-placeholder; it is not there yet). A worker group has no `http_service`.
+group (uvicorn, health-checked on `/health`) and the `worker` group
+(`python -m app.jobs`; email, push and cleanup run there). Both share secrets and
+releases, so scale the worker group separately (`fly scale count worker=1`). A worker
+group has no `http_service`.
 
 `release_command = "alembic upgrade head"` runs in a temporary machine of the new
 release, with the app's secrets, before traffic moves. If the migration fails the
@@ -67,14 +67,14 @@ fly secrets set --app <app> \
 
 ### Two database URLs: why
 
-| Variable | Role | Neon endpoint | Used by |
-| --- | --- | --- | --- |
-| `DATABASE_URL` | the **application role**: a non-owner role with only the table privileges it needs | **pooled** (`-pooler` in the host) | the running API and worker |
-| `MIGRATION_DATABASE_URL` | the **owner role** that created the tables | **direct** | `alembic` in `release_command` (the API falls back to `DATABASE_URL` only when this is unset) |
+| Variable                 | Role                                                                               | Neon endpoint                      | Used by                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | the **application role**: a non-owner role with only the table privileges it needs | **pooled** (`-pooler` in the host) | the running API and worker                                                                    |
+| `MIGRATION_DATABASE_URL` | the **owner role** that created the tables                                         | **direct**                         | `alembic` in `release_command` (the API falls back to `DATABASE_URL` only when this is unset) |
 
 Row-Level Security does not apply to a table's owner (unless forced) or to
 superusers, so a policy-protected table must be queried by a role that does not own
-it. The workspaces phase adds RLS; this split is how a deployment gets a non-owner
+it. Workspaces use RLS (ADR 0016); this split is how a deployment gets a non-owner
 application role while migrations can still create and alter tables. On the first
 deploy create the application role and grant it access (`GRANT SELECT, INSERT,
 UPDATE, DELETE ON ALL TABLES IN SCHEMA public`, plus default privileges for tables
@@ -125,7 +125,7 @@ The Docker image (`apps/web/Dockerfile`) also runs on any container host.
 the root `package.json`, mirrored by `cli.version` in `apps/mobile/eas.json`).
 
 - **action = build**, profile `preview` or `production`: `eas build --platform android
-  --non-interactive`. With **submit** (production only) it adds `--auto-submit`, which
+--non-interactive`. With **submit** (production only) it adds `--auto-submit`, which
   submits the AAB with the `production` profile in `eas.json` to the Play **internal**
   track. The Play service account key must already be uploaded to EAS
   (`pnpm exec eas credentials`); the first upload of an app to Play must be done by hand

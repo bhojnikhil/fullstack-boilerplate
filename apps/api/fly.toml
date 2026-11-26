@@ -1,4 +1,4 @@
-# Fly.io configuration for the API (and, later, the worker) as process groups of
+# Fly.io configuration for the API and the worker as process groups of
 # ONE Fly app. Deployed by .github/workflows/deploy.yml with `--app "$FLY_APP"`,
 # so `app` below is only a placeholder. Nothing here has been deployed.
 #
@@ -26,7 +26,7 @@ primary_region = "iad"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"
-  # worker = "<worker command>"   # added with the background-jobs worker; it needs no HTTP port
+  worker = "python -m app.jobs"   # background jobs; needs no HTTP port
 
 [http_service]
   internal_port = 8000
@@ -47,3 +47,8 @@ primary_region = "iad"
   size = "shared-cpu-1x"
   memory = "512mb"
   processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["worker"]
