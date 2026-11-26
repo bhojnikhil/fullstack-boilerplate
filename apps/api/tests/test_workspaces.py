@@ -415,3 +415,134 @@ async def test_ready_refuses_a_database_role_that_bypasses_row_level_security(
 
     assert (await probe(test_db_engine)).status_code == 200
     assert_error(await probe(owner_engine), 503, "not_ready")
+
+
+# --- R1-2: stale authorization after waiting for the workspace lock ----------------------
+
+
+async def interleave(owner_engine, monkeypatch, method, first, second):
+    """Run ``first`` until it has made its change but not committed (holding the workspace
+    lock), start ``second`` (which authorizes against the committed state and then waits
+    for the lock), and only then let ``first`` commit."""
+    import asyncio
+
+    from app.modules.workspaces.service import WorkspaceService
+
+    reached, release = asyncio.Event(), asyncio.Event()
+    original = getattr(WorkspaceService, method)
+
+    async def held(self, *args, **kwargs):
+        result = await original(self, *args, **kwargs)
+        reached.set()
+        await release.wait()
+        return result
+
+    monkeypatch.setattr(WorkspaceService, method, held)
+    async with asyncio.timeout(20):
+        a = asyncio.create_task(first())
+        await reached.wait()
+        b = asyncio.create_task(second())
+        while not await owner_query(
+            owner_engine,
+            "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+            "AND datname = current_database()",
+        ):
+            await asyncio.sleep(0.05)
+        release.set()
+        return await a, await b
+
+
+async def test_admin_invite_after_being_demoted_while_waiting_is_refused(
+    client, team, owner_engine, monkeypatch
+):
+    path = team.path
+    demote = lambda: client.patch(  # noqa: E731
+        f"{path}/members/{team.users[ADMIN].id}",
+        headers=team.headers[OWNER],
+        json={"role": "member"},
+    )
+    invite = lambda: client.post(  # noqa: E731
+        f"{path}/invitations", headers=team.headers[ADMIN], json={}
+    )
+    first, second = await interleave(owner_engine, monkeypatch, "change_role", demote, invite)
+    assert first.status_code == 204
+    assert_error(second, 403, "insufficient_role")
+    assert await owner_query(owner_engine, "SELECT 1 FROM invitations") == []
+
+
+async def test_admin_removal_after_being_removed_while_waiting_is_refused(
+    client, team, owner_engine, monkeypatch
+):
+    remove_admin = lambda: client.delete(  # noqa: E731
+        f"{team.path}/members/{team.users[ADMIN].id}", headers=team.headers[OWNER]
+    )
+    remove_member = lambda: client.delete(  # noqa: E731
+        f"{team.path}/members/{team.spare_member.id}", headers=team.headers[ADMIN]
+    )
+    first, second = await interleave(
+        owner_engine, monkeypatch, "remove_member", remove_admin, remove_member
+    )
+    assert first.status_code == 204
+    assert_error(second, 404, "workspace_not_found")
+    still = await owner_query(
+        owner_engine, "SELECT 1 FROM memberships WHERE user_id = :u", u=team.spare_member.id
+    )
+    assert still == [(1,)]
+
+
+async def test_owner_delete_after_ownership_moved_while_waiting_is_refused(
+    client, team, owner_engine, monkeypatch
+):
+    transfer = lambda: client.post(  # noqa: E731
+        f"{team.path}/transfer-ownership",
+        headers=team.headers[OWNER],
+        json={"user_id": str(team.users[ADMIN].id)},
+    )
+    delete = lambda: client.delete(team.path, headers=team.headers[OWNER])  # noqa: E731
+    first, second = await interleave(
+        owner_engine, monkeypatch, "transfer_ownership", transfer, delete
+    )
+    assert first.status_code == 204
+    assert_error(second, 403, "insufficient_role")
+    assert await owner_query(owner_engine, "SELECT 1 FROM workspaces") == [(1,)]
+
+
+async def test_two_transfers_by_the_same_owner_leave_exactly_one_owner(
+    client, team, owner_engine, monkeypatch
+):
+    def transfer_to(target):
+        return lambda: client.post(
+            f"{team.path}/transfer-ownership",
+            headers=team.headers[OWNER],
+            json={"user_id": str(target.id)},
+        )
+
+    first, second = await interleave(
+        owner_engine,
+        monkeypatch,
+        "transfer_ownership",
+        transfer_to(team.users[ADMIN]),
+        transfer_to(team.spare_admin),
+    )
+    assert first.status_code == 204
+    assert_error(second, 403, "insufficient_role")
+    owners = await owner_query(owner_engine, "SELECT user_id FROM memberships WHERE role = 'owner'")
+    assert owners == [(team.users[ADMIN].id,)]
+
+
+async def test_new_owner_cannot_leave_while_their_leave_waits_for_the_transfer(
+    client, team, owner_engine, monkeypatch
+):
+    transfer = lambda: client.post(  # noqa: E731
+        f"{team.path}/transfer-ownership",
+        headers=team.headers[OWNER],
+        json={"user_id": str(team.users[ADMIN].id)},
+    )
+    leave = lambda: client.post(f"{team.path}/leave", headers=team.headers[ADMIN])  # noqa: E731
+    first, second = await interleave(
+        owner_engine, monkeypatch, "transfer_ownership", transfer, leave
+    )
+    assert first.status_code == 204
+    assert_error(second, 409, "owner_cannot_leave")
+    owners = await owner_query(owner_engine, "SELECT user_id FROM memberships WHERE role = 'owner'")
+    assert owners == [(team.users[ADMIN].id,)]

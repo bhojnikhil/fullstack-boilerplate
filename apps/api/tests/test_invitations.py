@@ -55,7 +55,9 @@ async def test_link_invitation_is_hashed_single_use_and_joins_the_workspace(
     # Single use: a second person (or the same one again) is turned away.
     _, other = await person(session_factory, config, "other@example.com")
     assert_error(await accept(client, other, token), 404, "invalid_invitation")
-    assert_error(await accept(client, joiner, token), 404, "invalid_invitation")
+    # The joiner repeating the call (a lost response) is answered from their membership.
+    repeat = await accept(client, joiner, token)
+    assert repeat.status_code == 200 and repeat.json() == joined.json()
     assert (await client.get(path, headers=auth_headers)).json()["items"][0]["status"] == "accepted"
 
 
@@ -204,3 +206,67 @@ async def test_invitation_validation(client, auth_headers, path):
         )
     bad = await client.post("/v1/invitations/accept", headers=auth_headers, json={"token": "x"})
     assert_error(bad, 422, "validation_error")
+
+
+async def test_accept_is_not_replayed_after_the_member_was_removed(
+    client, auth_headers, path, session_factory, config, workspace
+):
+    """R1-4: a stored 200 must not outlive the membership."""
+    token = (await make_link(client, auth_headers, path))["token"]
+    joiner, headers = await person(session_factory, config, "joiner@example.com")
+    keyed = {**headers, "Idempotency-Key": "accept-1"}
+    first = await accept(client, keyed, token)
+    assert first.status_code == 200
+    # A retry while still a member answers from state.
+    again = await accept(client, keyed, token)
+    assert again.status_code == 200 and again.json()["id"] == first.json()["id"]
+
+    removal = await client.delete(
+        f"/v1/workspaces/{workspace.id}/members/{joiner.id}", headers=auth_headers
+    )
+    assert removal.status_code == 204
+    replay = await accept(client, keyed, token)
+    assert_error(replay, 404, "invalid_invitation")
+    assert workspace.name not in replay.text
+    assert_error(
+        await client.get(f"/v1/workspaces/{workspace.id}", headers=headers),
+        404,
+        "workspace_not_found",
+    )
+
+
+# --- R1-3: invitation tokens and the job queue --------------------------------------------
+
+
+@pytest.fixture
+async def queueing_client(app):
+    """Unlike ``client``, does not run the worker, so queued jobs stay visible."""
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as c:
+        yield c
+
+
+async def test_link_invitations_never_enter_the_job_queue(
+    queueing_client, auth_headers, path, owner_engine
+):
+    invite = await make_link(queueing_client, auth_headers, path)
+    jobs = await owner_query(owner_engine, "SELECT payload::text FROM jobs")
+    assert jobs == []
+    assert invite["token"]
+
+
+async def test_email_invitation_payloads_are_swept_by_the_job_purge(
+    queueing_client, auth_headers, path, owner_engine, session_factory
+):
+    from app.jobs.cleanup import purge_expired
+
+    client = queueing_client
+    await make_link(client, auth_headers, path, email="friend@example.com")
+    [(payload,)] = await owner_query(owner_engine, "SELECT payload::text FROM jobs")
+    assert "#token=" in payload  # The queued email carries the link until it is sent.
+    async with owner_engine.begin() as connection:
+        await connection.execute(text("UPDATE jobs SET created_at = now() - interval '30 days'"))
+    counts = await purge_expired(session_factory, job_retention_days=3)
+    assert counts["jobs"] == 1
+    assert await owner_query(owner_engine, "SELECT 1 FROM jobs") == []

@@ -15,7 +15,12 @@ from app.core.db import get_session_factory
 from app.core.errors import DomainError, ErrorCode, ErrorEnvelope
 
 router = APIRouter(tags=["health"])
-BYPASSES_RLS = text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+BYPASSES_RLS = text(
+    "SELECT r.rolsuper OR r.rolbypassrls OR EXISTS ("
+    "SELECT 1 FROM pg_tables t WHERE t.schemaname = current_schema() "
+    "AND t.tablename = 'memberships' AND t.tableowner = current_user) "
+    "FROM pg_roles r WHERE r.rolname = current_user"
+)
 log = structlog.get_logger()
 reported_unknown_sets: set[frozenset[str]] = set()
 reported_unknown_sets_lock = Lock()
@@ -57,7 +62,8 @@ async def readiness_check(request: Request) -> dict[str, str]:
     except (SQLAlchemyError, TimeoutError) as err:
         raise DomainError(ErrorCode.NOT_READY) from err
     if bypasses_rls and not request.app.state.settings.local:
-        # Row-level security does not apply to superusers and BYPASSRLS roles, so a
+        # Row-level security does not apply to superusers, BYPASSRLS roles and (for memberships)
+        # the table owner, so a
         # deployment connecting as one would silently lose its tenant isolation backstop.
         log.error("database_role_bypasses_row_level_security")
         raise DomainError(ErrorCode.NOT_READY)

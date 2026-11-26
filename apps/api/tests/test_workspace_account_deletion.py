@@ -1,5 +1,7 @@
 """Account deletion with workspaces (phase 4 hook)."""
 
+from sqlalchemy import text
+
 from app.modules.workspaces.models import WorkspaceRole
 from tests.conftest import create_workspace, in_workspace, owner_query, person
 from tests.test_http_contract import assert_error
@@ -62,3 +64,21 @@ async def test_admin_can_delete_the_account_and_the_workspace_carries_on(
     assert (await client.delete("/v1/me", headers=admin_headers)).status_code == 204
     members = await client.get(f"/v1/workspaces/{workspace.id}/members", headers=auth_headers)
     assert [m["role"] for m in members.json()["items"]] == ["owner"]
+
+
+async def test_deleting_the_account_removes_push_devices_and_tickets(
+    client, auth_headers, owner_engine
+):
+    from tests.test_devices import BODY
+
+    assert (await client.post("/v1/devices", json=BODY, headers=auth_headers)).status_code == 200
+    async with owner_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO push_tickets (ticket_id, device_id, message, created_at) "
+                "SELECT 'ticket-1', id, '{}'::jsonb, now() FROM devices"
+            )
+        )
+    assert (await client.delete("/v1/me", headers=auth_headers)).status_code == 204
+    for table in ("devices", "push_tickets"):
+        assert await owner_query(owner_engine, f"SELECT 1 FROM {table}") == []

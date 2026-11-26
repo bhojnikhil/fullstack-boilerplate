@@ -476,7 +476,7 @@ async def test_concurrent_index_migration_can_retry_after_partial_upgrade(empty_
             )
             is True
         )
-        # Revision 0004 replaces this index with a workspace-scoped one.
+        # Revision 0005 replaces this index with a workspace-scoped one.
         await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
         await connection.run_sync(lambda conn: command.check(migration_config(conn)))
 

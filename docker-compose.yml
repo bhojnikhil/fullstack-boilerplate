@@ -59,7 +59,7 @@ services:
     command: ["python", "-m", "app.jobs"]
     environment:
       ENV: development
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
+      DATABASE_URL: postgresql://app_user:app_user@postgres:5432/boilerplate
       WEB_URL: http://localhost:${WEB_PORT:-3000}
       EMAIL_BACKEND: smtp
       SMTP_HOST: mailpit

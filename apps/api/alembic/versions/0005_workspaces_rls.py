@@ -12,7 +12,10 @@ Create Date: 2026-11-25 09:00:00.000000
   ``items.user_id`` becomes the nullable ``items.created_by_id``.
 - Enables and FORCES row-level security on workspaces, memberships, invitations and
   items. Policies read the ``app.user_id``, ``app.workspace_id`` and
-  ``app.invitation_hash`` settings (app/core/rls.py).
+  ``app.invitation_hash`` settings (app/core/rls.py). A policy never trusts the
+  workspace setting alone: the row's workspace must also be one the user belongs to
+  (``app_is_member``, a SECURITY DEFINER helper; ``memberships_owner`` lets the owner role
+  read memberships for it).
 - Creates the application role (default ``app_user``, ``APP_DB_ROLE``) as NOLOGIN when
   it does not exist and grants it table access. The role has no password and cannot
   sign in until an operator runs ``ALTER ROLE ... LOGIN PASSWORD`` (or ran
@@ -39,71 +42,107 @@ TENANT_TABLES = ("workspaces", "memberships", "invitations", "items")
 WORKSPACE = "NULLIF(current_setting('app.workspace_id', true), '')::uuid"
 USER = "NULLIF(current_setting('app.user_id', true), '')::uuid"
 INVITATION = "NULLIF(current_setting('app.invitation_hash', true), '')"
+# Policies never trust app.workspace_id alone: the row's workspace must also be one the
+# user (app.user_id) belongs to. app_is_member() answers that without the recursion a
+# memberships subquery inside memberships' own policy would cause (see the function below).
+ACTIVE = "{ws} = " + WORKSPACE + " AND app_is_member({ws})"
+ACTIVE_MEMBER = ACTIVE.format(ws="workspace_id")
+# A usable invitation for the workspace, presented by its token digest (app.invitation_hash).
+USABLE_INVITATION = (
+    "EXISTS (SELECT 1 FROM invitations i WHERE i.workspace_id = {ws} "
+    "AND i.token_hash = " + INVITATION + " AND i.accepted_at IS NULL AND i.revoked_at IS NULL "
+    "AND i.expires_at > now()"
+)
 
-# (table, command, USING, WITH CHECK). Commands without USING/CHECK use None.
+# (table, command, name, USING, WITH CHECK). Commands without USING/CHECK use None.
 POLICIES: list[tuple[str, str, str, str | None, str | None]] = [
+    # A workspace is visible to its members, to its creator while it is being created
+    # (the membership row follows in the same transaction) and, for the row lock taken
+    # while joining, to the holder of a usable invitation. Only members can change it.
     (
         "workspaces",
         "select",
         "workspaces_select",
-        f"id = {WORKSPACE} OR EXISTS (SELECT 1 FROM memberships m "
-        f"WHERE m.workspace_id = workspaces.id AND m.user_id = {USER})",
+        "app_is_member(id) OR (id = "
+        + WORKSPACE
+        + " AND owner_id = "
+        + USER
+        + ") OR ("
+        + USABLE_INVITATION.format(ws="workspaces.id")
+        + ") AND id = "
+        + WORKSPACE
+        + ")",
         None,
     ),
-    ("workspaces", "insert", "workspaces_insert", None, f"id = {WORKSPACE}"),
-    ("workspaces", "update", "workspaces_update", f"id = {WORKSPACE}", f"id = {WORKSPACE}"),
-    ("workspaces", "delete", "workspaces_delete", f"id = {WORKSPACE}", None),
+    (
+        "workspaces",
+        "insert",
+        "workspaces_insert",
+        None,
+        "id = " + WORKSPACE + " AND owner_id = " + USER,
+    ),
+    (
+        "workspaces",
+        "update",
+        "workspaces_update",
+        "("
+        + ACTIVE.format(ws="id")
+        + ") OR ("
+        + USABLE_INVITATION.format(ws="workspaces.id")
+        + ") AND id = "
+        + WORKSPACE
+        + ")",
+        ACTIVE.format(ws="id"),
+    ),
+    ("workspaces", "delete", "workspaces_delete", ACTIVE.format(ws="id"), None),
     (
         "memberships",
         "select",
         "memberships_select",
-        f"user_id = {USER} OR workspace_id = {WORKSPACE}",
+        "user_id = " + USER + " OR (" + ACTIVE_MEMBER + ")",
         None,
     ),
-    # A membership is created for oneself, in the active workspace, either as the
-    # owner of a workspace being created or by presenting a usable invitation.
+    # A membership is created for oneself, in the active workspace, either as the owner of
+    # the workspace being created or by presenting a usable invitation of that role.
     (
         "memberships",
         "insert",
         "memberships_insert",
         None,
-        f"user_id = {USER} AND workspace_id = {WORKSPACE} AND (role = 'owner' OR EXISTS ("
-        "SELECT 1 FROM invitations i WHERE i.workspace_id = memberships.workspace_id "
-        f"AND i.token_hash = {INVITATION} AND i.role = memberships.role "
-        "AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > now()))",
+        "user_id = " + USER + " AND workspace_id = " + WORKSPACE + " AND ("
+        "(role = 'owner' AND EXISTS (SELECT 1 FROM workspaces w "
+        "WHERE w.id = memberships.workspace_id AND w.owner_id = "
+        + USER
+        + ")) OR "
+        + USABLE_INVITATION.format(ws="memberships.workspace_id")
+        + " AND i.role = memberships.role))",
     ),
-    (
-        "memberships",
-        "update",
-        "memberships_update",
-        f"workspace_id = {WORKSPACE}",
-        f"workspace_id = {WORKSPACE}",
-    ),
-    ("memberships", "delete", "memberships_delete", f"workspace_id = {WORKSPACE}", None),
+    ("memberships", "update", "memberships_update", ACTIVE_MEMBER, ACTIVE_MEMBER),
+    ("memberships", "delete", "memberships_delete", ACTIVE_MEMBER, None),
     (
         "invitations",
         "select",
         "invitations_select",
-        f"workspace_id = {WORKSPACE} OR token_hash = {INVITATION}",
+        "(" + ACTIVE_MEMBER + ") OR token_hash = " + INVITATION,
         None,
     ),
-    ("invitations", "insert", "invitations_insert", None, f"workspace_id = {WORKSPACE}"),
+    ("invitations", "insert", "invitations_insert", None, ACTIVE_MEMBER),
     (
         "invitations",
         "update",
         "invitations_update",
-        f"workspace_id = {WORKSPACE} OR token_hash = {INVITATION}",
-        f"workspace_id = {WORKSPACE} OR token_hash = {INVITATION}",
+        "(" + ACTIVE_MEMBER + ") OR token_hash = " + INVITATION,
+        "(" + ACTIVE_MEMBER + ") OR token_hash = " + INVITATION,
     ),
-    ("invitations", "delete", "invitations_delete", f"workspace_id = {WORKSPACE}", None),
+    ("invitations", "delete", "invitations_delete", ACTIVE_MEMBER, None),
     (
         "items",
         "all",
         "items_workspace",
-        f"workspace_id = {WORKSPACE} AND EXISTS (SELECT 1 FROM memberships m "
-        f"WHERE m.workspace_id = items.workspace_id AND m.user_id = {USER})",
-        f"workspace_id = {WORKSPACE} AND EXISTS (SELECT 1 FROM memberships m "
-        f"WHERE m.workspace_id = items.workspace_id AND m.user_id = {USER})",
+        "workspace_id = " + WORKSPACE + " AND EXISTS (SELECT 1 FROM memberships m "
+        "WHERE m.workspace_id = items.workspace_id AND m.user_id = " + USER + ")",
+        "workspace_id = " + WORKSPACE + " AND EXISTS (SELECT 1 FROM memberships m "
+        "WHERE m.workspace_id = items.workspace_id AND m.user_id = " + USER + ")",
     ),
 ]
 
@@ -260,11 +299,45 @@ def move_items_into_workspaces() -> None:
     op.create_index("ix_items_workspace_created_id", "items", ["workspace_id", "created_at", "id"])
 
 
+def create_membership_helper(role: str) -> None:
+    """``app_is_member(workspace)``: does ``app.user_id`` belong to the workspace?
+
+    memberships' own policy cannot contain a subquery on memberships (PostgreSQL rejects
+    the recursion), so the check is a SECURITY DEFINER function that runs as the owner.
+    It reads memberships through ``memberships_owner`` (below), which applies to the
+    owner role only. The search path is pinned and only the app role may call it.
+    """
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            EXECUTE format(
+                'CREATE OR REPLACE FUNCTION app_is_member(ws uuid) RETURNS boolean '
+                'LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_catalog '
+                'AS $f$ SELECT EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = ws '
+                'AND m.user_id = NULLIF(current_setting(''app.user_id'', true), '''')::uuid) $f$',
+                current_schema()
+            );
+        END
+        $$
+        """
+    )
+    op.execute("REVOKE ALL ON FUNCTION app_is_member(uuid) FROM PUBLIC")
+    op.execute(f"GRANT EXECUTE ON FUNCTION app_is_member(uuid) TO {role}")
+
+
 def enable_row_level_security() -> None:
     for table in TENANT_TABLES:
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         # FORCE: the table owner is bound by the policies too, not only the app role.
         op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+    # FORCE binds the owner too; this one policy lets the owner (migrations, and the
+    # SECURITY DEFINER helper above) read memberships. The API never connects as the owner,
+    # and /ready refuses a connection by the role that owns the tables.
+    op.execute(
+        "CREATE POLICY memberships_owner ON memberships FOR ALL TO CURRENT_USER "
+        "USING (true) WITH CHECK (true)"
+    )
     for table, command, name, using, check in POLICIES:
         clauses = f"FOR {command.upper()}"
         if using is not None:
@@ -325,13 +398,16 @@ def upgrade() -> None:
         deferrable=True,
         initially="DEFERRED",
     )
-    enable_row_level_security()
     grant_application_role(role)
+    create_membership_helper(role)
+    enable_row_level_security()
 
 
 def downgrade() -> None:
     for table, _command, name, _using, _check in POLICIES:
         op.execute(f"DROP POLICY IF EXISTS {name} ON {table}")
+    op.execute("DROP POLICY IF EXISTS memberships_owner ON memberships")
+    op.execute("DROP FUNCTION IF EXISTS app_is_member(uuid)")
     for table in TENANT_TABLES:
         op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")

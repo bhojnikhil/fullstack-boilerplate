@@ -18,7 +18,7 @@ NEXT_PUBLIC_API_URL ?= http://localhost:$(API_PORT)
 export NEXT_PUBLIC_API_URL
 
 # The app connects as a non-owner role (row-level security applies to it); migrations run
-# as the owner. See docs/adr/0011-workspaces-and-rls.md.
+# as the owner. See docs/adr/0016-workspaces-and-rls.md.
 DATABASE_URL ?= postgresql://app_user:app_user@localhost:$(POSTGRES_PORT)/boilerplate
 MIGRATION_DATABASE_URL ?= postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate
 export DATABASE_URL MIGRATION_DATABASE_URL

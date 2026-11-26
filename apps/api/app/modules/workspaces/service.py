@@ -140,7 +140,7 @@ class WorkspaceService:
         return page(rows, limit, lambda row: (row[0].created_at, row[0].id))
 
     async def update(self, context: WorkspaceContext, data: WorkspaceUpdate) -> Workspace:
-        workspace = await self.locked(context)
+        workspace, _ = await self.locked(context, WorkspaceRole.ADMIN)
         changed = await self.workspaces.change(
             workspace,
             name=data.name,
@@ -154,17 +154,31 @@ class WorkspaceService:
 
     async def delete(self, auth: AuthContext, context: WorkspaceContext) -> None:
         require_recent_authentication(auth.session, self.config)
-        workspace = await self.locked(context)
+        workspace, _ = await self.locked(context, WorkspaceRole.OWNER)
         await self.workspaces.delete(workspace)
         self.audit(
             AuditEventType.WORKSPACE_DELETED, context.user.id, workspace_id=str(workspace.id)
         )
 
-    async def locked(self, context: WorkspaceContext) -> Workspace:
+    async def locked(
+        self, context: WorkspaceContext, minimum: WorkspaceRole = WorkspaceRole.MEMBER
+    ) -> tuple[Workspace, WorkspaceRole]:
+        """Lock the workspace, then authorize the caller again against what is committed.
+
+        The request authorized the caller before it waited for this lock, and the owner may
+        have removed or demoted them, or transferred ownership, in the meantime. The role
+        returned is the current one; use it, not ``context.role``, for every decision.
+        """
         workspace = await self.workspaces.lock(context.workspace.id)
         if workspace is None:  # Deleted since the request authorized it.
             raise DomainError(ErrorCode.WORKSPACE_NOT_FOUND)
-        return workspace
+        member = await MemberRepository(self.db, workspace.id).get(context.user.id)
+        if member is None:  # Removed since the request authorized it.
+            raise DomainError(ErrorCode.WORKSPACE_NOT_FOUND)
+        role = WorkspaceRole(member.role)
+        if not role.at_least(minimum):
+            raise DomainError(ErrorCode.INSUFFICIENT_ROLE)
+        return workspace, role
 
     # --- members ----------------------------------------------------------------------
 
@@ -178,7 +192,7 @@ class WorkspaceService:
     async def change_role(
         self, context: WorkspaceContext, user_id: uuid.UUID, role: InvitableRole
     ) -> None:
-        await self.locked(context)
+        await self.locked(context, WorkspaceRole.OWNER)
         member = await MemberRepository(self.db, context.workspace.id).get(user_id)
         if member is None:
             raise DomainError(ErrorCode.MEMBER_NOT_FOUND)
@@ -197,7 +211,7 @@ class WorkspaceService:
         )
 
     async def remove_member(self, context: WorkspaceContext, user_id: uuid.UUID) -> None:
-        await self.locked(context)
+        _, acting_role = await self.locked(context, WorkspaceRole.ADMIN)
         members = MemberRepository(self.db, context.workspace.id)
         member = await members.get(user_id)
         if member is None:
@@ -205,7 +219,7 @@ class WorkspaceService:
         if member.role == WorkspaceRole.OWNER:
             raise DomainError(ErrorCode.OWNER_PROTECTED)
         # Admins manage members; only the owner manages admins.
-        if member.role == WorkspaceRole.ADMIN and context.role != WorkspaceRole.OWNER:
+        if member.role == WorkspaceRole.ADMIN and acting_role != WorkspaceRole.OWNER:
             raise DomainError(ErrorCode.INSUFFICIENT_ROLE)
         await members.delete(member)
         self.audit(
@@ -233,7 +247,7 @@ class WorkspaceService:
         self, auth: AuthContext, context: WorkspaceContext, new_owner_id: uuid.UUID
     ) -> None:
         require_recent_authentication(auth.session, self.config)
-        workspace = await self.locked(context)
+        workspace, _ = await self.locked(context, WorkspaceRole.OWNER)
         members = MemberRepository(self.db, workspace.id)
         current = await members.get(context.user.id)
         target = await members.get(new_owner_id)
@@ -264,13 +278,14 @@ class WorkspaceService:
         self, context: WorkspaceContext, data: InvitationCreate
     ) -> tuple[Invitation, str | None]:
         """Create an invitation. Returns the token only for link invitations."""
-        if data.role == InvitableRole.ADMIN and context.role != WorkspaceRole.OWNER:
-            raise DomainError(ErrorCode.INSUFFICIENT_ROLE)
         await self.limiter.hit(limits.INVITE_PER_IP, self.client.ip)
         await self.limiter.hit(limits.INVITE_PER_ACCOUNT, str(context.user.id))
         await self.limiter.hit(limits.INVITE_PER_WORKSPACE, str(context.workspace.id))
 
-        workspace = await self.locked(context)
+        workspace, acting_role = await self.locked(context, WorkspaceRole.ADMIN)
+        # Decided on the current role: only the owner can hand out admin.
+        if data.role == InvitableRole.ADMIN and acting_role != WorkspaceRole.OWNER:
+            raise DomainError(ErrorCode.INSUFFICIENT_ROLE)
         invitations = InvitationRepository(self.db, workspace.id)
         if data.email is not None:
             invited = await self.users.get_by_email(data.email)
@@ -332,6 +347,8 @@ class WorkspaceService:
         return page(rows, limit, lambda row: (row.created_at, row.id))
 
     async def revoke_invitation(self, context: WorkspaceContext, invitation_id: uuid.UUID) -> None:
+        # Workspace first, then the invitation row: the order accepting uses.
+        await self.locked(context, WorkspaceRole.ADMIN)
         invitation = await InvitationRepository(self.db, context.workspace.id).lock(invitation_id)
         if invitation is None:
             raise DomainError(ErrorCode.INVITATION_NOT_FOUND)
@@ -352,6 +369,9 @@ class WorkspaceService:
     async def accept_invitation(self, user: User, token: str) -> tuple[Workspace, WorkspaceRole]:
         """Join the workspace an invitation names.
 
+        Idempotent by state, not by stored response: repeating the call as the member who
+        joined with this token returns the workspace while they are still a member.
+
         Every way an invitation can be unusable (unknown, expired, revoked, already used,
         meant for another address) answers the same ``invalid_invitation``.
         """
@@ -366,6 +386,14 @@ class WorkspaceService:
         found = await tokens.find(token_digest(token))
         if found is None:
             raise DomainError(ErrorCode.INVALID_INVITATION)
+        if found.accepted_at is not None and found.accepted_by_id == user.id:
+            # A retry of an accept that went through (lost response): answer from the
+            # current state, so someone removed since then gets the usual 404.
+            role = await self.workspaces.authorize(user.id, found.workspace_id)
+            joined = await self.workspaces.get(found.workspace_id) if role else None
+            if role is None or joined is None:
+                raise DomainError(ErrorCode.INVALID_INVITATION)
+            return joined, role
 
         # Same order as every other flow: user, workspace, then the invitation row.
         locked_user = await self.users.lock(user.id)
