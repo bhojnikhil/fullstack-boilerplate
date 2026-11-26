@@ -332,3 +332,21 @@ async def workspace(owner_sessions, test_user: User) -> Workspace:
 def ws_headers(auth_headers: dict[str, str], workspace: Workspace) -> dict[str, str]:
     """``test_user``'s credentials with their workspace active."""
     return in_workspace(auth_headers, workspace)
+
+
+async def person(
+    session_factory, config: Settings, email: str, *, verified: bool = True
+) -> tuple[User, dict[str, str]]:
+    """A user with a live session: (user, bearer headers)."""
+    user = await create_user(
+        session_factory, email=email, name=email.split("@")[0], verified=verified
+    )
+    return user, bearer(await sign_in(session_factory, config, user))
+
+
+async def owner_query(owner_engine, sql: str, **params):
+    """Rows from a read-only statement run as the owner (bypasses row-level security)."""
+    from sqlalchemy import text
+
+    async with owner_engine.connect() as connection:
+        return (await connection.execute(text(sql), params)).all()
