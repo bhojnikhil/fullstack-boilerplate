@@ -8,6 +8,10 @@ Exit code 0 means healthy (HTTP 2xx within the timeout); anything else is
 unhealthy; redirects are not followed. Usage::
 
     python healthcheck.py [URL] [EXPECTED_STATUS]
+    python healthcheck.py --heartbeat PATH MAX_AGE_SECONDS
+
+``--heartbeat`` is the worker's probe: healthy if PATH was modified within MAX_AGE_SECONDS.
+The worker touches it every 30 seconds from its scheduler loop (no database needed).
 
 The URL defaults to ``$HEALTHCHECK_URL`` or ``http://127.0.0.1:8000/health``.
 With ``EXPECTED_STATUS``, only that exact HTTP status counts as success.
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -53,7 +58,19 @@ def check(url: str, timeout: float = TIMEOUT_SECONDS, *, expected_status: int | 
     return 0 if 200 <= status < 300 else 1
 
 
+def check_heartbeat(path: str, max_age: float) -> int:
+    try:
+        age = time.time() - os.stat(path).st_mtime
+    except OSError:
+        return 1
+    return 0 if age <= max_age else 1
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "--heartbeat":
+        if len(argv) != 4:
+            return 2
+        return check_heartbeat(argv[2], float(argv[3]))
     url = argv[1] if len(argv) > 1 else os.environ.get("HEALTHCHECK_URL", DEFAULT_URL)
     expected_status = int(argv[2]) if len(argv) > 2 else None
     return check(url, expected_status=expected_status)

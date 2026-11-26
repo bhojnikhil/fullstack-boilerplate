@@ -1,4 +1,4 @@
-# Local development stack: postgres, api (hot reload), web, mailpit.
+# Local development stack: postgres, api (hot reload), worker, web, mailpit.
 # `make up` starts it; see docker-compose.smoke.yml for the as-packaged check.
 services:
   postgres:
@@ -42,6 +42,34 @@ services:
         condition: service_started
     volumes:
       - ./apps/api:/app
+
+  # Background job worker (email, push, periodic cleanup). Same image and settings as the
+  # api; it has no reload, so `docker compose restart worker` after changing job code.
+  worker:
+    build:
+      context: ./apps/api
+      target: dev
+    command: ["python", "-m", "app.jobs"]
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
+      WEB_URL: http://localhost:${WEB_PORT:-3000}
+      EMAIL_BACKEND: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    volumes:
+      - ./apps/api:/app
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py", "--heartbeat", "/tmp/worker-heartbeat", "90"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Next.js frontend. Runs the production build (standalone `server.js`);
   # rebuild to pick up changes (`docker compose up -d --build web`), or use

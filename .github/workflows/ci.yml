@@ -230,13 +230,13 @@ jobs:
         if: always()
         run: |
           docker compose ps
-          for svc in api web; do
+          for svc in api worker web; do
             docker inspect --format "$svc: {{json .State.Health}}" "$(docker compose ps -q $svc)" || true
           done
 
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs api web
+        run: docker compose logs api worker web
 
       - name: Stop services
         if: always()

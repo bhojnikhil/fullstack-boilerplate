@@ -43,6 +43,8 @@ class AuditEventType(StrEnum):
     ACCOUNT_DELETED = "account_deleted"
     # The inbox owner proved control of an unverified account; unproven credentials removed.
     ACCOUNT_CLAIMED = "account_claimed"
+    # A push token registered by another user moved to the caller (details: previous owner).
+    DEVICE_TOKEN_REASSIGNED = "device_token_reassigned"
 
 
 class AuditEvent(Base, UUIDMixin):
