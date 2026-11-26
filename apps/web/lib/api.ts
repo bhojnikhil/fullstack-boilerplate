@@ -56,6 +56,16 @@ function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
     return navigator.locks.request("auth-refresh", task);
   return task();
 }
+export function getActiveWorkspace(): string | null {
+  const userId = identity?.split(":")[0];
+  return userId ? (storage()?.getItem(`workspace:${userId}`) ?? null) : null;
+}
+export function setActiveWorkspace(id: string | null) {
+  const userId = identity?.split(":")[0];
+  if (!userId) throw new Error("Sign in before selecting a workspace.");
+  if (id) storage()?.setItem(`workspace:${userId}`, id);
+  else storage()?.removeItem(`workspace:${userId}`);
+}
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -133,12 +143,65 @@ export class ApiClient {
       .POST("/v1/auth/verify-email", { body: { token, password } })
       .then(unwrap);
   }
+  forgotPassword(email: string) {
+    return this.client
+      .POST("/v1/auth/password/forgot", { body: { email } })
+      .then(unwrap);
+  }
+  resetPassword(token: string, newPassword: string) {
+    return this.client
+      .POST("/v1/auth/password/reset", { body: { token, new_password: newPassword } })
+      .then(unwrap);
+  }
+  confirmEmail(token: string) {
+    return this.client.POST("/v1/auth/email/confirm", { body: { token } }).then(unwrap);
+  }
   async login(email: string, password: string) {
     const data = unwrap(
       await this.client.POST("/v1/auth/login", { body: { email, password } }),
     );
     startSession(data);
     return data;
+  }
+  async googleLogin(idToken: string) {
+    const data = unwrap(
+      await this.authClient.POST("/v1/auth/google", { body: { id_token: idToken } }),
+    );
+    startSession(data);
+    return data;
+  }
+  updateProfile(name: string) {
+    return this.client.PATCH("/v1/me", { body: { name } }).then(unwrap);
+  }
+  reauthenticate(credentials: { password: string } | { id_token: string }) {
+    return this.client
+      .POST("/v1/auth/reauthenticate", { body: credentials })
+      .then(unwrap);
+  }
+  changePassword(current_password: string, new_password: string) {
+    return this.client
+      .POST("/v1/me/password", { body: { current_password, new_password } })
+      .then(unwrap);
+  }
+  changeEmail(new_email: string) {
+    return this.client.POST("/v1/me/email", { body: { new_email } }).then(unwrap);
+  }
+  async deleteAccount() {
+    unwrap(await this.client.DELETE("/v1/me"));
+    endSession();
+  }
+  sessions(cursor?: string) {
+    return this.client
+      .GET("/v1/auth/sessions", { params: { query: { cursor } } })
+      .then(unwrap);
+  }
+  revokeSession(session_id: string) {
+    return this.client
+      .DELETE("/v1/auth/sessions/{session_id}", { params: { path: { session_id } } })
+      .then(unwrap);
+  }
+  revokeOtherSessions() {
+    return this.client.POST("/v1/auth/sessions/revoke-others").then(unwrap);
   }
   async logout() {
     const expected = identity;
@@ -154,35 +217,146 @@ export class ApiClient {
     }
     endSession();
   }
+  workspaces(cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces", { params: { query: { cursor } } })
+      .then(unwrap);
+  }
+  createWorkspace(name: string, currency: string, timezone: string) {
+    return this.client
+      .POST("/v1/workspaces", { body: { name, currency, timezone } })
+      .then(unwrap);
+  }
+  workspace(workspace_id: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}", { params: { path: { workspace_id } } })
+      .then(unwrap);
+  }
+  renameWorkspace(workspace_id: string, name: string) {
+    return this.client
+      .PATCH("/v1/workspaces/{workspace_id}", {
+        params: { path: { workspace_id } },
+        body: { name },
+      })
+      .then(unwrap);
+  }
+  leaveWorkspace(workspace_id: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/leave", {
+        params: { path: { workspace_id } },
+      })
+      .then(unwrap);
+  }
+  transferWorkspace(workspace_id: string, user_id: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/transfer-ownership", {
+        params: { path: { workspace_id } },
+        body: { user_id },
+      })
+      .then(unwrap);
+  }
+  deleteWorkspace(workspace_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}", { params: { path: { workspace_id } } })
+      .then(unwrap);
+  }
+  members(workspace_id: string, cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}/members", {
+        params: { path: { workspace_id }, query: { cursor } },
+      })
+      .then(unwrap);
+  }
+  changeRole(workspace_id: string, user_id: string, role: "admin" | "member") {
+    return this.client
+      .PATCH("/v1/workspaces/{workspace_id}/members/{user_id}", {
+        params: { path: { workspace_id, user_id } },
+        body: { role },
+      })
+      .then(unwrap);
+  }
+  removeMember(workspace_id: string, user_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}/members/{user_id}", {
+        params: { path: { workspace_id, user_id } },
+      })
+      .then(unwrap);
+  }
+  invitations(workspace_id: string, cursor?: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}/invitations", {
+        params: { path: { workspace_id }, query: { cursor } },
+      })
+      .then(unwrap);
+  }
+  createInvitation(workspace_id: string, role: "admin" | "member", email?: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/invitations", {
+        params: { path: { workspace_id } },
+        body: { role, email: email || null },
+      })
+      .then(unwrap);
+  }
+  revokeInvitation(workspace_id: string, invitation_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}/invitations/{invitation_id}", {
+        params: { path: { workspace_id, invitation_id } },
+      })
+      .then(unwrap);
+  }
+  acceptInvitation(token: string) {
+    return this.client.POST("/v1/invitations/accept", { body: { token } }).then(unwrap);
+  }
   getCurrentUser() {
     return this.client.GET("/v1/me").then(unwrap);
   }
-  async getItems(cursor?: string) {
+  async getItems(workspaceId: string, cursor?: string) {
     return {
       data: unwrap(
-        await this.client.GET("/v1/items", { params: { query: { cursor } } }),
+        await this.client.GET("/v1/items", {
+          headers: { "X-Workspace-Id": workspaceId },
+          params: { query: { cursor } },
+        }),
       ),
     };
   }
-  getItem(id: string) {
+  getItem(workspaceId: string, id: string) {
     return this.client
-      .GET("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .GET("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId },
+        params: { path: { item_id: id } },
+      })
       .then(unwrap);
   }
-  createItem(title: string, description: string) {
-    return this.client.POST("/v1/items", { body: { title, description } }).then(unwrap);
+  createItem(workspaceId: string, title: string, description: string, key: string) {
+    return this.client
+      .POST("/v1/items", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
+        body: { title, description },
+      })
+      .then(unwrap);
   }
-  updateItem(id: string, title: string, description: string) {
+  updateItem(
+    workspaceId: string,
+    id: string,
+    title: string,
+    description: string,
+    key: string,
+  ) {
     return this.client
       .PATCH("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
         params: { path: { item_id: id } },
         body: { title, description },
       })
       .then(unwrap);
   }
-  deleteItem(id: string) {
+  deleteItem(workspaceId: string, id: string, key: string) {
     return this.client
-      .DELETE("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .DELETE("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
+        params: { path: { item_id: id } },
+      })
       .then(unwrap);
   }
   health() {

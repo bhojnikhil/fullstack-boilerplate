@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { ApiClient } from "@/lib/api";
+import { ApiClient, getActiveWorkspace, setActiveWorkspace } from "@/lib/api";
 import { createApiClient } from "@repo/api-client";
 
 afterEach(() => {
@@ -34,7 +34,9 @@ it("does not retry a write when a different tab replaced the session", async () 
   );
   const api = new ApiClient();
   await api.login("a@example.com", "password");
-  await expect(api.createItem("write", "")).rejects.toThrow("different session");
+  await expect(api.createItem("workspace-a", "write", "", "intent")).rejects.toThrow(
+    "different session",
+  );
   expect(writes).toBe(1);
 });
 it("refreshes an expired access token before revoking the same session", async () => {
@@ -211,3 +213,50 @@ it("silently restores a session after reload when the first request returns 401"
   expect((await new FreshClient().getCurrentUser()).id).toBe("a");
   expect(calls).toBe(2);
 });
+it("keeps workspace selection scoped to the signed-in account", async () => {
+  let account = "a";
+  const workspaceHeaders: (string | null)[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (request: Request) => {
+      if (request.url.endsWith("/v1/auth/login"))
+        return json(tokens(account, "session"));
+      workspaceHeaders.push(request.headers.get("X-Workspace-Id"));
+      return json({ items: [], next_cursor: null });
+    }),
+  );
+  const client = new ApiClient();
+  await client.login("a@example.com", "password");
+  setActiveWorkspace("workspace-a");
+  await client.getItems("workspace-a");
+  account = "b";
+  await client.login("b@example.com", "password");
+  expect(getActiveWorkspace()).toBeNull();
+  await client.getItems("workspace-b");
+  expect(workspaceHeaders).toEqual(["workspace-a", "workspace-b"]);
+});
+
+for (const endpoint of ["sessions", "reauthenticate"] as const) {
+  it(`refreshes expired credentials for ${endpoint}`, async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: Request) => {
+        if (
+          request.url.endsWith("/v1/auth/login") ||
+          request.url.endsWith("/v1/auth/refresh")
+        )
+          return json(tokens("a", "one"));
+        calls++;
+        return calls === 1
+          ? json({}, 401)
+          : json(endpoint === "sessions" ? { items: [], next_cursor: null } : {});
+      }),
+    );
+    const client = new ApiClient();
+    await client.login("a@example.com", "password");
+    if (endpoint === "sessions") await client.sessions();
+    else await client.reauthenticate({ password: "password" });
+    expect(calls).toBe(2);
+  });
+}

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { appName } from "@/lib/public-settings";
+import { AccountNavigation } from "@/components/account-navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -35,12 +36,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </Link>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                   <nav aria-label="Main navigation" className="flex gap-4 text-sm">
+                    <Link href="/workspaces" className="hover:underline">
+                      Workspaces
+                    </Link>
+                    <Link href="/account" className="hover:underline">
+                      Account
+                    </Link>
                     <Link href="/items" className="hover:underline">
                       Items
                     </Link>
-                    <Link href="/auth/login" className="hover:underline">
-                      Sign in
-                    </Link>
+                    <AccountNavigation />
                   </nav>
                   <ThemeToggle />
                 </div>

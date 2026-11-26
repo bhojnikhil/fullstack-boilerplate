@@ -15,8 +15,8 @@ export default function AccountDeletionPage() {
       <section>
         <h2>Delete your account in the app</h2>
         <p>
-          [Add the in-app steps for starting account deletion and describe how users
-          confirm the request.]
+          Sign in, open Account, enter your password under Delete account, and confirm
+          the deletion. If you cannot sign in, use the request path below.
         </p>
       </section>
       <section>

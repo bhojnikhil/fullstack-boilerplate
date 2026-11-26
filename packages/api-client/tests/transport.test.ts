@@ -60,6 +60,29 @@ describe("transport", () => {
       false,
     );
   });
+  it("refreshes and retries authenticated session endpoints", async () => {
+    for (const endpoint of ["sessions", "reauthenticate"] as const) {
+      const refresh = vi.fn(async () => true);
+      const send = vi
+        .fn()
+        .mockResolvedValueOnce(unauthorized())
+        .mockResolvedValueOnce(ok());
+      const client = createApiClient({
+        baseUrl: "https://example.test",
+        refresh,
+        fetch: send,
+      });
+      const result =
+        endpoint === "sessions"
+          ? await client.GET("/v1/auth/sessions")
+          : await client.POST("/v1/auth/reauthenticate", {
+              body: { password: "password" },
+            });
+      expect(result.response.status).toBe(200);
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledTimes(2);
+    }
+  });
   it("refreshes with a null session and reuses an overridable key on retry", async () => {
     let token: string | null = null;
     const requests: Request[] = [];

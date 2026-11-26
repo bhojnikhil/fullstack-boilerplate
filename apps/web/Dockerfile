@@ -30,7 +30,8 @@ COPY apps/web apps/web
 # public API URL must be provided at build time. It must be reachable from the
 # user's browser.
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID=
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
 RUN pnpm --filter web build \
     # Readable by the runtime user regardless of the host checkout's file modes
     # (e.g. 600 under a restrictive umask); writable by root only.
