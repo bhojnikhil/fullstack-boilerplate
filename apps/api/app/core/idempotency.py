@@ -71,7 +71,15 @@ async def begin_idempotency(
     if not 1 <= len(key) <= KEY_MAX_LENGTH or any(not 33 <= ord(char) <= 126 for char in key):
         raise DomainError(ErrorCode.INVALID_IDEMPOTENCY_KEY)
 
-    target = (request.method.encode(), request.url.path.encode(), request.scope["query_string"])
+    # The active workspace is part of the request: the same key in another workspace
+    # is a different (mismatching) request, never a replay of this one.
+    workspace = request.headers.get("x-workspace-id", "").strip().lower()
+    target = (
+        request.method.encode(),
+        request.url.path.encode(),
+        request.scope["query_string"],
+        workspace.encode(),
+    )
     media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
     body = await request.body()
     digest = request_digest((*target, media_type.encode(), body))

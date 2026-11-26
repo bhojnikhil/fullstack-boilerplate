@@ -15,6 +15,8 @@ LOCAL_SECRET = "dev-secret-key-change-in-production"
 TEST_SECRET = "test-secret-key-do-not-use-in-production-12345678"
 # Secrets published in this repository; rejected (after stripping) outside development.
 PUBLISHED_SECRETS = frozenset({LOCAL_SECRET, TEST_SECRET})
+DEFAULT_APP_DB_ROLE = "app_user"
+DB_ROLE_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}", re.ASCII)
 MIN_SECRET_LENGTH = 32
 ORIGIN_PATTERN = re.compile(
     r"https?://(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]+)?", re.IGNORECASE | re.ASCII
@@ -54,6 +56,16 @@ class DatabaseSettings(BaseSettings):
     env: Environment = "production"
     database_url: SecretStr | None = None
     migration_database_url: SecretStr | None = None
+    # The non-owner login role the API connects as (DATABASE_URL). Migrations create it
+    # if missing (without a password) and grant it access; row-level security applies to it.
+    app_db_role: str = DEFAULT_APP_DB_ROLE
+
+    @field_validator("app_db_role")
+    @classmethod
+    def validate_app_db_role(cls, role: str) -> str:
+        if not DB_ROLE_PATTERN.fullmatch(role):
+            raise ValueError("APP_DB_ROLE must be a lowercase PostgreSQL role name")
+        return role
 
     def database(self, *, migration: bool = False) -> URL:
         configured = self.migration_database_url if migration else None
@@ -90,6 +102,8 @@ class Settings(DatabaseSettings):
     password_breach_check: bool = False
     email_token_expire_hours: int = Field(default=24, gt=0, le=168)
     password_reset_expire_minutes: int = Field(default=30, gt=0, le=1440)
+    # How long a workspace invitation (emailed or shareable link) can be accepted.
+    invitation_expire_days: int = Field(default=7, gt=0, le=30)
 
     google_auth_enabled: bool = False
     google_web_client_id: str = ""

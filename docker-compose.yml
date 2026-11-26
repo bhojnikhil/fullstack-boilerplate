@@ -11,6 +11,10 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the non-owner role the API uses (first start of an empty volume only;
+      # `make db-bootstrap` does the same for an existing one).
+      - ./scripts/db/bootstrap-app-role.sql:/bootstrap-app-role.sql:ro
+      - ./scripts/db/initdb/01-app-role.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d boilerplate"]
       interval: 10s
@@ -25,7 +29,10 @@ services:
       target: dev
     environment:
       ENV: development
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
+      # The API connects as a non-owner role so row-level security applies to it;
+      # migrations (`make migrate-compose`) run as the owner. Development credentials.
+      DATABASE_URL: postgresql://app_user:app_user@postgres:5432/boilerplate
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/boilerplate
       CORS_ORIGINS: '["http://localhost:${WEB_PORT:-3000}"]'
       # Links in emails open the web app.
       WEB_URL: http://localhost:${WEB_PORT:-3000}

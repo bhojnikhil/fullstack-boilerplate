@@ -17,15 +17,18 @@ export POSTGRES_PORT API_PORT WEB_PORT MAILPIT_UI_PORT MAILPIT_SMTP_PORT
 NEXT_PUBLIC_API_URL ?= http://localhost:$(API_PORT)
 export NEXT_PUBLIC_API_URL
 
-DATABASE_URL ?= postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate
-export DATABASE_URL
+# The app connects as a non-owner role (row-level security applies to it); migrations run
+# as the owner. See docs/adr/0011-workspaces-and-rls.md.
+DATABASE_URL ?= postgresql://app_user:app_user@localhost:$(POSTGRES_PORT)/boilerplate
+MIGRATION_DATABASE_URL ?= postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate
+export DATABASE_URL MIGRATION_DATABASE_URL
 
 CYAN := \033[0;36m
 GREEN := \033[0;32m
 NC := \033[0m
 
 .PHONY: help setup hooks dev up down logs ps build fresh smoke \
-	migrate migrate-compose migration db-shell \
+	migrate migrate-compose migration db-shell db-bootstrap \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
 	fmt fmt-check build-web mobile test-mobile doctor-mobile gen-client
 
@@ -92,11 +95,14 @@ smoke: ## Check the packaged containers, production API and public web pages
 
 # ============================== Database ====================================
 
-migrate-compose: ## Apply migrations with a one-off Compose container
+db-bootstrap: ## Create the non-owner application role (app_user) in the Compose Postgres
 	$(COMPOSE) up -d --wait postgres
+	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres -v app_role=app_user -v app_password=app_user < scripts/db/bootstrap-app-role.sql
+
+migrate-compose: db-bootstrap ## Apply migrations as the owner with a one-off Compose container
 	$(COMPOSE) run --rm --build --no-deps api alembic upgrade head
 
-migrate: ## Apply migrations from the host (MIGRATION_DATABASE_URL or DATABASE_URL)
+migrate: ## Apply migrations from the host as the owner (MIGRATION_DATABASE_URL)
 	cd $(API_DIR) && $(UV) run --locked alembic upgrade head
 
 migration: ## Create an Alembic migration: make migration name=add_column
@@ -108,12 +114,16 @@ db-shell: ## Open a psql shell on the dev database
 
 # ============================== Quality =====================================
 
-test: ## Run API tests against a dedicated Postgres database (override TEST_DATABASE_URL)
-ifndef TEST_DATABASE_URL
-	$(COMPOSE) up -d --wait postgres
+test: ## Run API tests on a dedicated Postgres database (override TEST_DATABASE_URL + TEST_MIGRATION_DATABASE_URL)
+ifdef TEST_DATABASE_URL
+ifndef TEST_MIGRATION_DATABASE_URL
+	$(error TEST_MIGRATION_DATABASE_URL (the owner role) is required with TEST_DATABASE_URL (the app role))
+endif
+else
+	$(MAKE) db-bootstrap
 	printf '%s\n' "SELECT 'CREATE DATABASE boilerplate_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'boilerplate_test')" '\gexec' | $(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres
 endif
-	@cd $(API_DIR) && ENV=test SECRET_KEY="$$(openssl rand -hex 32)" DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
+	@cd $(API_DIR) && ENV=test SECRET_KEY="$$(openssl rand -hex 32)" DATABASE_URL="$(or $(TEST_DATABASE_URL),postgresql://app_user:app_user@localhost:$(POSTGRES_PORT)/boilerplate_test)" MIGRATION_DATABASE_URL="$(or $(TEST_MIGRATION_DATABASE_URL),postgresql://postgres:postgres@localhost:$(POSTGRES_PORT)/boilerplate_test)" $(UV) run --locked pytest
 
 test-mobile: ## Mobile unit tests (Jest)
 	$(PNPM) turbo run test --filter=mobile

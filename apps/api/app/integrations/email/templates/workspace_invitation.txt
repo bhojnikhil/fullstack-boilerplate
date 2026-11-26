@@ -1,0 +1,10 @@
+Hi,
+
+$inviter invited you to join the workspace "$workspace" on $app_name as $role.
+
+Open this link to accept:
+
+$link
+
+The invitation expires in $expires and can be used once. Sign in with this email address
+to accept it. If you were not expecting it, you can ignore this email.

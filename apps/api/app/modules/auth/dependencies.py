@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.core import rls
 from app.core.config import Settings, get_settings
 from app.core.db import RequestSession
 from app.core.errors import DomainError, ErrorCode
@@ -40,6 +41,8 @@ async def get_auth_context(
     request.state.user_id = str(user.id)
     if not user.is_active:
         raise DomainError(ErrorCode.INACTIVE_USER)
+    # Row-level security compares tenant rows with this user for the rest of the request.
+    await rls.bind(db, rls.USER_ID, str(user.id))
     return AuthContext(user, session)
 
 
