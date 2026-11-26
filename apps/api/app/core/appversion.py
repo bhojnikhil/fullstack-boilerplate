@@ -78,7 +78,7 @@ router = APIRouter(tags=["meta"])
 
 
 @router.get(META_PATH)
-async def get_meta(config: Annotated[Settings, Depends(get_settings)]) -> Meta:
+async def get(config: Annotated[Settings, Depends(get_settings)]) -> Meta:
     """Version information for clients; no authentication."""
     return Meta(
         min_supported_app_version=config.min_supported_app_version,
