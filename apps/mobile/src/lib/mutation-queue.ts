@@ -25,6 +25,8 @@ export type QueuedMutation =
       workspaceId: string | null;
       createdAt: number;
       body: ItemFields;
+      attempted?: boolean;
+      pendingEdit?: Partial<ItemFields>;
     }
   | {
       kind: "item.update";
@@ -44,6 +46,7 @@ export type NewMutation = DistributiveOmit<QueuedMutation, "id" | "key" | "creat
 export type SendOutcome =
   /** Applied (or already applied, per the idempotency key). */
   | "done"
+  | { appliedId: string }
   /** The server will never accept it (404, 422...): drop it and tell the user. */
   | "rejected"
   /** Not now (offline, 5xx, 429): keep it and stop; try again later. */
@@ -102,7 +105,7 @@ export function parseQueue(raw: string | null): QueuedMutation[] {
     const { kind, id, key, createdAt, workspaceId, body, itemId } = entry;
     if (typeof id !== "string" || typeof key !== "string") continue;
     if (typeof createdAt !== "number") continue;
-    if (workspaceId !== null && typeof workspaceId !== "string") continue;
+    if (typeof workspaceId !== "string" || !workspaceId) continue;
     if (!isFields(body)) continue;
     if (kind === "item.create") {
       if (typeof body.title !== "string") continue;
@@ -115,6 +118,10 @@ export function parseQueue(raw: string | null): QueuedMutation[] {
         createdAt,
         workspaceId,
         body: { title: body.title, description },
+        attempted: entry.attempted !== false,
+        ...(isFields(entry.pendingEdit)
+          ? { pendingEdit: entry.pendingEdit as Partial<ItemFields> }
+          : {}),
       });
     } else if (kind === "item.update" && typeof itemId === "string") {
       const next: QueuedMutation["body"] = {};
@@ -131,6 +138,8 @@ export function parseQueue(raw: string | null): QueuedMutation[] {
   return valid;
 }
 
+const pendingClears = new Map<string, Promise<void>>();
+
 export function createMutationQueue(options: {
   accountId: string;
   send: (mutation: QueuedMutation) => Promise<SendOutcome | { rejected: string }>;
@@ -146,27 +155,48 @@ export function createMutationQueue(options: {
   let running: Promise<void> | null = null;
   let cleared = false;
   let writes: Promise<unknown> = Promise.resolve();
+  let operations: Promise<unknown> = Promise.resolve();
+  const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+    const barrier = pendingClears.get(key);
+    const task = async () => {
+      await barrier;
+      return fn();
+    };
+    const result = operations.then(task, task);
+    operations = result.catch(() => undefined);
+    return result;
+  };
   const listeners = new Set<() => void>();
 
   const notify = () => listeners.forEach((listener) => listener());
-  const persist = () => {
-    if (cleared) return writes;
-    const snapshot = JSON.stringify(queue);
+  const commit = async (next: QueuedMutation[]) => {
+    if (cleared) throw new Error("Queue retired");
+    const snapshot = JSON.stringify(next);
     writes = writes
       .catch(() => undefined)
-      .then(() => (cleared ? undefined : storage.setItem(key, snapshot)));
-    return writes;
-  };
-  const commit = async (next: QueuedMutation[]) => {
+      .then(() => {
+        if (cleared) throw new Error("Queue retired");
+        return storage.setItem(key, snapshot);
+      });
+    await writes;
+    if (cleared) throw new Error("Queue retired");
     queue = next;
     notify();
-    await persist();
   };
 
   async function run(): Promise<void> {
     while (!cleared) {
-      const head = queue[0];
-      if (!head) return;
+      const head = await serial(async () => {
+        const current = queue[0];
+        if (!current || cleared) return null;
+        if (current.kind === "item.create" && !current.attempted) {
+          const frozen = { ...current, attempted: true };
+          await commit([frozen, ...queue.slice(1)]);
+          return frozen;
+        }
+        return current;
+      });
+      if (!head || cleared) return;
       sending = head.id;
       let outcome: Awaited<ReturnType<typeof options.send>>;
       try {
@@ -178,12 +208,37 @@ export function createMutationQueue(options: {
       }
       if (cleared) return;
       if (outcome === "retry") return;
-      if (outcome !== "done") {
+      if (
+        outcome !== "done" &&
+        !(typeof outcome === "object" && "appliedId" in outcome)
+      ) {
         const reason = typeof outcome === "string" ? "rejected" : outcome.rejected;
         failed = [...failed, { mutation: head, reason }];
       }
-      await commit(queue.filter((entry) => entry.id !== head.id));
-      if (outcome === "done") options.onApplied?.(head);
+      await serial(async () => {
+        if (cleared) return;
+        const current = queue.find((entry) => entry.id === head.id);
+        const rest = queue.filter((entry) => entry.id !== head.id);
+        if (
+          current?.kind === "item.create" &&
+          current.pendingEdit &&
+          typeof outcome === "object" &&
+          "appliedId" in outcome
+        ) {
+          rest.unshift({
+            kind: "item.update",
+            id: newId(),
+            key: newId(),
+            createdAt: Date.now(),
+            workspaceId: current.workspaceId,
+            itemId: outcome.appliedId,
+            body: current.pendingEdit,
+          });
+        }
+        await commit(rest);
+      });
+      if (outcome === "done" || (typeof outcome === "object" && "appliedId" in outcome))
+        options.onApplied?.(head);
     }
   }
 
@@ -195,44 +250,58 @@ export function createMutationQueue(options: {
       return () => listeners.delete(listener);
     },
     async load() {
-      queue = parseQueue(await storage.getItem(key));
-      notify();
+      await serial(async () => {
+        const loaded = parseQueue(await storage.getItem(key));
+        if (!cleared) {
+          queue = loaded;
+          notify();
+        }
+      });
     },
     async enqueue(mutation) {
+      if (!mutation.workspaceId) throw new Error("Select a workspace before saving.");
       const entry = {
         ...mutation,
         id: newId(),
         key: newId(),
         createdAt: Date.now(),
+        ...(mutation.kind === "item.create" ? { attempted: false } : {}),
       } as QueuedMutation;
-      await commit([...queue, entry]);
+      await serial(() => commit([...queue, entry]));
       return entry;
     },
     async patchCreate(id, body) {
-      const target = queue.find((entry) => entry.id === id);
-      if (!target || target.kind !== "item.create" || sending === id) return false;
-      await commit(
-        queue.map((entry) =>
-          entry.id === id && entry.kind === "item.create"
-            ? { ...entry, body: { ...entry.body, ...body } }
-            : entry,
-        ),
-      );
-      return true;
+      return serial(async () => {
+        const target = queue.find((entry) => entry.id === id);
+        if (!target || target.kind !== "item.create") return false;
+        await commit(
+          queue.map((entry) =>
+            entry.id !== id || entry.kind !== "item.create"
+              ? entry
+              : entry.attempted
+                ? { ...entry, pendingEdit: { ...entry.pendingEdit, ...body } }
+                : { ...entry, body: { ...entry.body, ...body } },
+          ),
+        );
+        return true;
+      });
     },
     async remove(id) {
-      if (sending === id) return;
-      await commit(queue.filter((entry) => entry.id !== id));
+      await serial(async () => {
+        if (sending !== id) await commit(queue.filter((entry) => entry.id !== id));
+      });
     },
     async removeUpdatesFor(itemId) {
-      await commit(
-        queue.filter(
-          (entry) =>
-            !(
-              entry.kind === "item.update" &&
-              entry.itemId === itemId &&
-              sending !== entry.id
-            ),
+      await serial(() =>
+        commit(
+          queue.filter(
+            (entry) =>
+              !(
+                entry.kind === "item.update" &&
+                entry.itemId === itemId &&
+                sending !== entry.id
+              ),
+          ),
         ),
       );
     },
@@ -247,13 +316,25 @@ export function createMutationQueue(options: {
       });
       return running;
     },
-    async clear() {
+    clear() {
       cleared = true;
       queue = [];
       failed = [];
       notify();
-      await writes.catch(() => undefined);
-      await storage.removeItem(key);
+      const previous = pendingClears.get(key);
+      const cleanup = (async () => {
+        await previous?.catch(() => undefined);
+        await operations.catch(() => undefined);
+        await writes.catch(() => undefined);
+        await storage.removeItem(key);
+      })();
+      pendingClears.set(key, cleanup);
+      void cleanup
+        .finally(() => {
+          if (pendingClears.get(key) === cleanup) pendingClears.delete(key);
+        })
+        .catch(() => undefined);
+      return cleanup;
     },
   };
 }

@@ -56,21 +56,25 @@ export function classifyStatus(status: number, code: string): SendOutcome {
 const RETRY_INTERVAL_MS = 30_000;
 
 export function QueueProvider({ children }: { children: ReactNode }) {
-  const { api } = useServices();
-  const { accountId } = useSession();
+  const { api, session } = useServices();
+  const { accountId, sessionId } = useSession();
   const queryClient = useQueryClient();
 
   const queue = useMemo(() => {
-    if (!accountId) return null;
+    if (!accountId || !sessionId) return null;
     return createMutationQueue({
       accountId,
       onApplied: () => {
         queryClient.invalidateQueries({ queryKey: ["items"] }).catch(() => undefined);
       },
       send: async (mutation) => {
+        const current = session.getState();
+        if (current.accountId !== accountId || current.sessionId !== sessionId)
+          return "retry";
+        if (!mutation.workspaceId) return { rejected: "Missing workspace" };
         // The recorded Idempotency-Key and workspace are replayed verbatim.
         const headers: Record<string, string> = { "Idempotency-Key": mutation.key };
-        if (mutation.workspaceId) headers["X-Workspace-Id"] = mutation.workspaceId;
+        headers["X-Workspace-Id"] = mutation.workspaceId;
         try {
           const result =
             mutation.kind === "item.create"
@@ -80,7 +84,11 @@ export function QueueProvider({ children }: { children: ReactNode }) {
                   body: mutation.body,
                   headers,
                 });
-          if (result.response.ok) return "done";
+          if (result.response.ok) {
+            if (mutation.kind === "item.create" && result.data && "id" in result.data)
+              return { appliedId: result.data.id };
+            return mutation.kind === "item.create" ? "retry" : "done";
+          }
           const error = apiErrorFromResult(result);
           const outcome = classifyStatus(error.status, error.code);
           return outcome === "rejected" ? { rejected: error.message } : outcome;
@@ -91,11 +99,20 @@ export function QueueProvider({ children }: { children: ReactNode }) {
         }
       },
     });
-  }, [accountId, api, queryClient]);
+  }, [accountId, sessionId, api, queryClient, session]);
 
   useEffect(() => {
     if (!queue) return;
     let active = true;
+    const retireIfChanged = () => {
+      const current = session.getState();
+      if (current.accountId !== accountId || current.sessionId !== sessionId) {
+        active = false;
+        void queue.clear();
+      }
+    };
+    const offSession = session.subscribe(retireIfChanged);
+    retireIfChanged();
     const flush = () => {
       if (active && onlineManager.isOnline()) queue.flush().catch(() => undefined);
     };
@@ -119,11 +136,12 @@ export function QueueProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
       clearInterval(timer);
+      offSession();
       offOnline();
       appState.remove();
       offQueue();
     };
-  }, [queue]);
+  }, [queue, session, accountId, sessionId]);
 
   return <QueueContext.Provider value={queue}>{children}</QueueContext.Provider>;
 }

@@ -82,7 +82,11 @@ export function createSessionStore(deps: {
     };
   };
 
-  async function doRefresh(sessionId: string, refreshToken: string): Promise<boolean> {
+  async function doRefresh(
+    sessionId: string,
+    accountId: string | null,
+    refreshToken: string,
+  ): Promise<boolean> {
     const startedEpoch = epoch;
     let response;
     try {
@@ -109,7 +113,7 @@ export function createSessionStore(deps: {
             refreshToken: response.refresh_token,
           })
         : null;
-      if (!next || next.sessionId !== sessionId) {
+      if (!next || next.sessionId !== sessionId || next.accountId !== accountId) {
         // A refresh that lands on another session/account is never adopted.
         epoch += 1;
         await storage.clearTokens();
@@ -165,7 +169,11 @@ export function createSessionStore(deps: {
         return Promise.resolve(true);
       }
       if (inflight?.sessionId === expectedSession) return inflight.promise;
-      const promise = doRefresh(expectedSession, current.refreshToken).finally(() => {
+      const promise = doRefresh(
+        expectedSession,
+        current.accountId,
+        current.refreshToken,
+      ).finally(() => {
         if (inflight?.promise === promise) inflight = null;
       });
       inflight = { sessionId: expectedSession, promise };

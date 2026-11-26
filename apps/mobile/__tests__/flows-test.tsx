@@ -234,6 +234,7 @@ describe("items", () => {
     );
     await renderRouter(APP_DIR, { initialUrl: "/items" });
     await screen.findByText("No items yet");
+    await act(async () => harness.services.workspaceId.set("ws-1"));
 
     await act(async () => onlineManager.setOnline(false));
     await act(async () => router.push("/item/new"));

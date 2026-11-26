@@ -69,7 +69,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     SecureStore.getItemAsync(APP_LOCK_KEY)
       .then((value) => setEnabledState(value === "1"))
-      .catch(() => undefined)
+      .catch(() => setEnabledState(true))
       .finally(() => setLoaded(true));
   }, []);
 
@@ -99,12 +99,12 @@ export function AppLockGate({ children }: { children: ReactNode }) {
     return () => subscription.remove();
   }, [enabled]);
 
-  const showLock = loaded && enabled && locked && status === "signedIn";
+  const showLock = status === "signedIn" && (!loaded || (enabled && locked));
   useEffect(() => {
     // unlock() only sets state after the biometric prompt resolves.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (showLock) void unlock();
-  }, [showLock, unlock]);
+    if (loaded && showLock) void unlock();
+  }, [loaded, showLock, unlock]);
 
   const setEnabled = useCallback(async (next: boolean) => {
     if (next) {
@@ -127,7 +127,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   return (
     <AppLockContext.Provider value={{ enabled, setEnabled }}>
       <View style={{ flex: 1 }}>
-        {children}
+        {!showLock ? children : null}
         {showLock ? (
           <View
             testID="app-lock"

@@ -55,16 +55,33 @@ export interface AppServicesOptions {
 
 export function createAppServices(options: AppServicesOptions): AppServices {
   const send = options.fetch ?? ((...args) => globalThis.fetch(...args));
+  const updateRequired = createValueStore<UpdateRequired | null>(null);
+  const wrappedSend: typeof globalThis.fetch = async (input, init) => {
+    const response = await send(input, init);
+    if (response.status === 426) {
+      let minVersion: string | null = null;
+      try {
+        const body = (await response.clone().json()) as {
+          error?: { details?: { min_supported_app_version?: unknown } };
+        };
+        const min = body.error?.details?.min_supported_app_version;
+        if (typeof min === "string") minVersion = min;
+      } catch {
+        /* Optional response body. */
+      }
+      updateRequired.set({ minVersion });
+    }
+    return response;
+  };
   const session = createSessionStore({
     storage: options.storage ?? tokenStorage,
     requestRefresh: createRefreshRequest({
       baseUrl: options.baseUrl,
       headers: options.headers,
-      fetch: send,
+      fetch: wrappedSend,
     }),
   });
   const workspaceId = createValueStore<string | null>(null);
-  const updateRequired = createValueStore<UpdateRequired | null>(null);
 
   const api = createApiClient({
     baseUrl: options.baseUrl,
@@ -76,23 +93,7 @@ export function createAppServices(options: AppServicesOptions): AppServices {
     getSessionId: () => session.getState().sessionId,
     getWorkspaceId: () => workspaceId.get(),
     refresh: (expected) => session.refresh(expected),
-    fetch: async (input, init) => {
-      const response = await send(input, init);
-      if (response.status === 426) {
-        let minVersion: string | null = null;
-        try {
-          const body = (await response.clone().json()) as {
-            error?: { details?: { min_supported_app_version?: unknown } };
-          };
-          const min = body.error?.details?.min_supported_app_version;
-          if (typeof min === "string") minVersion = min;
-        } catch {
-          // Body is optional context only.
-        }
-        updateRequired.set({ minVersion });
-      }
-      return response;
-    },
+    fetch: wrappedSend,
   });
   return { api, session, workspaceId, updateRequired };
 }

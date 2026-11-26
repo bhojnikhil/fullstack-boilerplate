@@ -56,8 +56,11 @@ export function overlayQueue(
     .filter((entry) => entry.kind === "item.create")
     .map((entry) => ({
       id: `${LOCAL_PREFIX}${entry.id}`,
-      title: entry.body.title,
-      description: entry.body.description,
+      title: entry.pendingEdit?.title ?? entry.body.title,
+      description:
+        entry.pendingEdit?.description !== undefined
+          ? entry.pendingEdit.description
+          : entry.body.description,
       is_active: true,
       created_at: new Date(entry.createdAt).toISOString(),
       pending: true,

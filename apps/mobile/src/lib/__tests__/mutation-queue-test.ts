@@ -177,8 +177,89 @@ describe("parseQueue", () => {
       },
       "nope",
     ]);
-    expect(parseQueue(raw).map((m) => m.id)).toEqual(["1"]);
+    expect(parseQueue(raw).map((m) => m.id)).toEqual([]);
     expect(parseQueue("{not json")).toEqual([]);
     expect(parseQueue(null)).toEqual([]);
+  });
+});
+
+describe("queue durability and replay", () => {
+  it("requires a resolved workspace", async () => {
+    const { queue } = setup(async () => "done");
+    await expect(queue.enqueue({ ...create("x"), workspaceId: null })).rejects.toThrow(
+      "workspace",
+    );
+    expect(queue.entries()).toHaveLength(0);
+  });
+
+  it("does not send before persistence, or after a failed write", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const storage = memoryStorage();
+    const original = storage.setItem;
+    storage.setItem = jest.fn(async (key, value) => {
+      await gate;
+      await original(key, value);
+      return undefined;
+    });
+    const send = jest.fn(async () => "retry" as const);
+    const { queue } = setup(send, storage);
+    queue.subscribe(() => {
+      void queue.flush();
+    });
+    const pending = queue.enqueue(create("x"));
+    await Promise.resolve();
+    const flushing = queue.flush();
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+    release();
+    await pending;
+    await flushing;
+    expect(send).toHaveBeenCalledTimes(1);
+    const broken = memoryStorage();
+    broken.setItem = jest.fn(async () => {
+      throw new Error("disk");
+    });
+    const other = setup(send, broken).queue;
+    await expect(other.enqueue(create("y"))).rejects.toThrow("disk");
+    await other.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes an attempted create and replays an edit as a separate update", async () => {
+    const sent: QueuedMutation[] = [];
+    let first = true;
+    const storage = memoryStorage();
+    const { queue } = setup(async (m) => {
+      sent.push(m);
+      if (first) {
+        first = false;
+        return "retry";
+      }
+      return m.kind === "item.create" ? { appliedId: "server-id" } : "done";
+    }, storage);
+    const entry = await queue.enqueue(create("original"));
+    await queue.flush();
+    await queue.patchCreate(entry.id, { title: "edited" });
+    const restarted = setup(async (m) => {
+      sent.push(m);
+      return m.kind === "item.create" ? { appliedId: "server-id" } : "done";
+    }, storage).queue;
+    await restarted.load();
+    await restarted.flush();
+    expect(sent[1]).toMatchObject({
+      kind: "item.create",
+      key: entry.key,
+      body: { title: "original" },
+    });
+    expect(sent[2]).toMatchObject({
+      kind: "item.update",
+      itemId: "server-id",
+      body: { title: "edited" },
+      workspaceId: "ws",
+    });
+    expect(sent[2]?.key).not.toBe(entry.key);
   });
 });

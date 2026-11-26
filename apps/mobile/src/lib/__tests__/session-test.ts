@@ -180,3 +180,27 @@ describe("request headers", () => {
     expect(services.updateRequired.get()).toEqual({ minVersion: "2.0.0" });
   });
 });
+
+describe("refresh identity and update handling", () => {
+  it("rejects a refresh with the same session but a different account", async () => {
+    const { services, requests } = setup({
+      "GET /v1/items": () => apiError(401, "invalid_token"),
+      "POST /v1/auth/refresh": () => json(200, tokenResponse("sid-A", "user-B")),
+    });
+    await services.session.load();
+    await services.api.GET("/v1/items");
+    expect(services.session.getState().status).toBe("signedOut");
+    expect(requests.filter((r) => r.path === "/v1/items")).toHaveLength(1);
+  });
+
+  it("sets the update state when refresh returns 426", async () => {
+    const { services } = setup({
+      "GET /v1/items": () => apiError(401, "invalid_token"),
+      "POST /v1/auth/refresh": () =>
+        json(426, { error: { details: { min_supported_app_version: "2.0" } } }),
+    });
+    await services.session.load();
+    await expect(services.api.GET("/v1/items")).rejects.toMatchObject({ status: 426 });
+    expect(services.updateRequired.get()).toEqual({ minVersion: "2.0" });
+  });
+});
