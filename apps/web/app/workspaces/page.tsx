@@ -412,6 +412,7 @@ export default function WorkspacesPage() {
                           m.user_id,
                           m.role === "admin" ? "member" : "admin",
                         );
+                        if (selectedRef.current !== selected) return;
                         setMembers((v) =>
                           v.map((x) =>
                             x.user_id === m.user_id
@@ -433,6 +434,7 @@ export default function WorkspacesPage() {
                     onClick={() =>
                       void run(async () => {
                         await api.removeMember(selected, m.user_id);
+                        if (selectedRef.current !== selected) return;
                         setMembers((v) => v.filter((x) => x.user_id !== m.user_id));
                       }, "Member removed.")
                     }
@@ -448,6 +450,7 @@ export default function WorkspacesPage() {
                 onClick={() =>
                   void run(async () => {
                     const page = await api.members(selected, memberCursor);
+                    if (selectedRef.current !== selected) return;
                     setMembers((v) => [...v, ...page.items]);
                     setMemberCursor(page.next_cursor);
                   })
@@ -471,11 +474,14 @@ export default function WorkspacesPage() {
                         role,
                         email,
                       );
+                      if (selectedRef.current !== selected) return;
+                      const qrCode = invitation.link
+                        ? await QRCode.toDataURL(invitation.link)
+                        : "";
+                      if (selectedRef.current !== selected) return;
                       setInvitations((v) => [invitation, ...v]);
                       setLink(invitation.link || "");
-                      setQr(
-                        invitation.link ? await QRCode.toDataURL(invitation.link) : "",
-                      );
+                      setQr(qrCode);
                     },
                     email
                       ? "Invitation sent."
@@ -527,6 +533,7 @@ export default function WorkspacesPage() {
                       onClick={() =>
                         void run(async () => {
                           await api.revokeInvitation(selected, i.id);
+                          if (selectedRef.current !== selected) return;
                           setInvitations((v) =>
                             v.map((x) =>
                               x.id === i.id ? { ...x, status: "revoked" } : x,
@@ -546,6 +553,7 @@ export default function WorkspacesPage() {
                   onClick={() =>
                     void run(async () => {
                       const page = await api.invitations(selected, invitationCursor);
+                      if (selectedRef.current !== selected) return;
                       setInvitations((v) => [...v, ...page.items]);
                       setInvitationCursor(page.next_cursor);
                     })
