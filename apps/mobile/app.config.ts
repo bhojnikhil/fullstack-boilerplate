@@ -73,6 +73,9 @@ export interface AppEnv {
   easProjectId: string | undefined;
   /** Read and exposed to the app; lib/sentry.ts starts Sentry when set. */
   sentryDsn: string | undefined;
+  /** Public OAuth client ids (not secrets) for native Google sign-in. */
+  googleWebClientId: string | undefined;
+  googleIosClientId: string | undefined;
 }
 
 type Env = Record<string, string | undefined>;
@@ -96,6 +99,8 @@ export const APP_CONFIG_ENV_KEYS = [
   "APP_LINK_PATHS",
   "EAS_PROJECT_ID",
   "SENTRY_DSN",
+  "GOOGLE_WEB_CLIENT_ID",
+  "GOOGLE_IOS_CLIENT_ID",
   "EAS_BUILD",
   "EAS_BUILD_PROFILE",
   "EXPO_NO_DOTENV",
@@ -321,7 +326,23 @@ export function parseAppEnv(env: Env): AppEnv {
       ? check("EAS_PROJECT_ID", easProjectIdRaw, UUID_RE, "a UUID")
       : undefined,
     sentryDsn: read(env, "SENTRY_DSN"),
+    googleWebClientId: parseGoogleClientId(env, "GOOGLE_WEB_CLIENT_ID"),
+    googleIosClientId: parseGoogleClientId(env, "GOOGLE_IOS_CLIENT_ID"),
   };
+}
+
+const GOOGLE_CLIENT_ID_RE = /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/;
+
+function parseGoogleClientId(env: Env, key: AppConfigEnvKey): string | undefined {
+  const raw = read(env, key);
+  return raw
+    ? check(key, raw, GOOGLE_CLIENT_ID_RE, "like 123-abc.apps.googleusercontent.com")
+    : undefined;
+}
+
+/** iOS URL scheme Google sign-in needs: the reversed iOS client id. */
+export function googleIosUrlScheme(clientId: string): string {
+  return `com.googleusercontent.apps.${clientId.replace(".apps.googleusercontent.com", "")}`;
 }
 
 /**
@@ -340,6 +361,8 @@ export interface AppExtra {
   appVariant: string;
   appDomain?: string;
   sentryDsn?: string;
+  googleWebClientId?: string;
+  googleIosClientId?: string;
   eas: { projectId?: string };
 }
 
@@ -352,6 +375,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     appVariant: env.variant,
     ...(env.appDomain ? { appDomain: env.appDomain } : {}),
     ...(env.sentryDsn ? { sentryDsn: env.sentryDsn } : {}),
+    ...(env.googleWebClientId ? { googleWebClientId: env.googleWebClientId } : {}),
+    ...(env.googleIosClientId ? { googleIosClientId: env.googleIosClientId } : {}),
     eas: env.easProjectId ? { projectId: env.easProjectId } : {},
   };
 
@@ -406,7 +431,25 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           }
         : {}),
     },
-    plugins: ["expo-router", "expo-secure-store"],
+    plugins: [
+      "expo-router",
+      "expo-secure-store",
+      "expo-notifications",
+      [
+        "expo-local-authentication",
+        { faceIDPermission: "Allow $(PRODUCT_NAME) to unlock the app with Face ID." },
+      ],
+      // The plugin (no-Firebase mode) only configures the iOS URL scheme and
+      // refuses to run without it; Android needs no build-time setup.
+      ...(env.googleIosClientId
+        ? [
+            [
+              "@react-native-google-signin/google-signin",
+              { iosUrlScheme: googleIosUrlScheme(env.googleIosClientId) },
+            ] as [string, { iosUrlScheme: string }],
+          ]
+        : []),
+    ],
     extra,
   };
 };

@@ -11,7 +11,7 @@
 -- access. `make db-bootstrap` runs this against the Compose database with a dev password.
 --
 -- Not for production secrets on a shared shell: the password appears in the process list.
--- Use your host's role management there (see docs/adr/0015-workspaces-and-rls.md).
+-- Use your host's role management there (see docs/adr/0016-workspaces-and-rls.md).
 
 SELECT format(
     'CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',

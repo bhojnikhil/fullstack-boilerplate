@@ -19,4 +19,5 @@ Add a new numbered file when a decision changes; don't rewrite history.
 | [0012](0012-api-client.md)                       | OpenAPI TypeScript client                                              | Accepted |
 | [0013](0013-postgres-job-queue.md)               | Postgres job queue, worker and email delivery                          | Accepted |
 | [0014](0014-push-storage-version-gate-sentry.md) | Expo push, S3 presigned URLs, mobile version gate and Sentry           | Accepted |
-| [0015](0015-workspaces-and-rls.md)               | Workspaces, roles, invitations and row-level security                  | Accepted |
+| [0015](0015-mobile-session-and-offline-queue.md) | Mobile session binding and the offline mutation queue                  | Accepted |
+| [0016](0016-workspaces-and-rls.md)               | Workspaces, roles, invitations and row-level security                  | Accepted |

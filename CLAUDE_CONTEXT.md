@@ -90,7 +90,7 @@ Conventions added with the auth redesign:
   memory and refreshes it with the cookie.
 - `/v1/items` is workspace-scoped: it needs `X-Workspace-Id`, sorts by creation time and UUID,
   and its list response includes `items` and `next_cursor`.
-- Tenancy ([ADR 0015](docs/adr/0015-workspaces-and-rls.md)): workspace-scoped routes depend
+- Tenancy ([ADR 0016](docs/adr/0016-workspaces-and-rls.md)): workspace-scoped routes depend
   on `ActiveWorkspace` (header) or `PathWorkspace` / `require_role("admin", path=True)`
   (`app.modules.workspaces.dependencies`), which answer 404 for non-members. Tenant
   repositories extend `app.core.tenancy.TenantRepository` and take the workspace id; never

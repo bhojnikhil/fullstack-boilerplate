@@ -88,12 +88,15 @@ Makefile          single entry point for both Python and JS tasks (`make help`)
   tabs where the Web Locks API exists), and sends `X-Platform: web`. Zustand auth store
   (`lib/auth-store.ts`).
 
-**Mobile (`apps/mobile`)**: foundation only; see [Mobile](#mobile). It does not call
-the API yet: no sign-in, no data.
+**Mobile (`apps/mobile`)**: see [Mobile](#mobile). Sign-in and sign-up with email
+verification, email-link screens, native Google sign-in (development build), items with an
+offline write queue, sessions, profile, account deletion, biometric lock and push
+registration. Workspace, members and invitation screens are written against an **assumed**
+API contract because phase 5 is not merged yet (see below).
 
 - Expo SDK 58, React Native 0.88, TypeScript 6 (`strict` plus the shared
   `packages/config` options), Expo Router with `(auth)` and `(app)` route groups and
-  placeholder screens (sign in, sign up, items, settings) in a tab layout.
+  screens for auth, items, workspaces and settings.
 - Styling with React Native `StyleSheet` and typed light/dark design tokens
   ([ADR 0006](docs/adr/0006-mobile-styling.md)).
 - `app.config.ts` driven by environment variables, `eas.json` build profiles and EAS
@@ -591,7 +594,7 @@ coarse client label. Failed sign-ins store an email digest, not the address.
 
 ## Workspaces and tenancy
 
-Design record: [ADR 0015](docs/adr/0015-workspaces-and-rls.md). A workspace is the tenant
+Design record: [ADR 0016](docs/adr/0016-workspaces-and-rls.md). A workspace is the tenant
 (a household, a team). Users join through memberships with a role of `owner`, `admin` or
 `member`; there is exactly one owner. **Signing up does not create a workspace**: a new
 account has none and the client runs an onboarding step (create one, or accept an
@@ -699,13 +702,57 @@ Mobile unit tests (Jest + React Native Testing Library, no device needed):
 `make test-mobile`. They cover the design tokens (including WCAG AA contrast), the secure
 token storage wrapper, the persisted query cache, network status and the offline banner,
 the app config validation, the Android manifest that `expo prebuild` would generate, and
-routing tests that render the real `src/app` tree.
+routing and flow tests that render the real `src/app` tree against a fake API (sign-up,
+sign-in, email-link screens, items list and pull-to-refresh, an offline create replayed on
+reconnect, the 426 screen), plus unit tests for token refresh (single flight, session
+binding, transient failures), the offline queue and the push route allowlist.
 
 ## Mobile
 
-`apps/mobile` is an Expo SDK 58 app. This is the foundation only: screens are
-placeholders, and nothing calls the API yet. Auth, the generated API client and real
-data arrive in later phases.
+`apps/mobile` is an Expo SDK 58 app on the generated API client
+([ADR 0012](docs/adr/0012-api-client.md)). Design notes for sessions and the offline
+queue are in [ADR 0015](docs/adr/0015-mobile-session-and-offline-queue.md).
+
+### Features
+
+- **Auth.** Sign in, sign up (then a "check your email" screen: the API blocks sign-in
+  until the email is verified), forgot password. The email links open
+  `/auth/verify-email?token=` (asks for the password chosen at sign-up, which the API
+  requires with the token) and `/auth/reset-password?token=`. Sessions, profile (name,
+  change password) and account deletion (re-authenticates first) are in Settings.
+  The app does not change the email address or link/unlink Google yet.
+- **Token refresh.** A 401 triggers one refresh for all concurrent requests. The refresh
+  stays bound to the session the request was sent as: if the user signed out or switched
+  account meanwhile, the pending request is not replayed. Requests send `X-App-Version`,
+  `X-Platform`, `X-Workspace-Id` (the active workspace) and, on writes, `Idempotency-Key`.
+  A `426` replaces the app with a "Please update" screen.
+- **Google sign-in** uses `@react-native-google-signin/google-signin` and sends the ID token
+  to `POST /v1/auth/google`. It needs a **development or production build** (not Expo Go) and
+  `GOOGLE_WEB_CLIENT_ID` (+ `GOOGLE_IOS_CLIENT_ID` for iOS); the button is hidden when either
+  is missing. The web client id must be one of the API's configured Google client ids. Android
+  also needs your signing SHA-1 registered on the Android OAuth client in Google Cloud. None of
+  this has been run against real Google here.
+- **Items.** List with pull-to-refresh, create, edit, delete. Creates and edits go through a
+  persisted queue (see ADR 0015) and show at once as "Waiting to sync"; they are replayed
+  with their original idempotency keys when the connection returns.
+- **Workspaces, members, invitations** (provisional). The screens exist (switch, create,
+  members, invite link with share sheet and QR code, accept via `/invite/<token>`), but
+  they call endpoints that are not in the generated client yet:
+  `/v1/workspaces`, `/v1/workspaces/{id}/members`, `/v1/workspaces/{id}/invitations`,
+  `/v1/invitations/accept`. The request and response shapes are an assumption taken from the
+  spec and live in `src/features/workspaces/workspace-api.ts`; replace them with typed client
+  calls after phase 5 lands. Until then they are untested against a real server.
+- **Biometric lock** (Settings): locks at launch and after 30 s in the background; turning it
+  on requires a successful biometric check. It is a UI gate, not encryption.
+- **Push.** A dismissible card on the Items tab (not at launch) asks for permission; once
+  granted, the Expo push token is registered with `POST /v1/devices` on each start and removed
+  at sign-out. Tapping a notification follows `data.url` only if it is an allowed in-app route.
+  Tokens need a physical device, an EAS project id (`EAS_PROJECT_ID`) and, on Android, FCM
+  credentials; none of that was exercised here.
+- **Deep links.** The scheme works everywhere. For Android App Links set `APP_DOMAIN` and
+  `APP_LINK_PATHS=/auth/verify-email,/auth/reset-password,/invite/` (exact and prefix paths,
+  as the API's email links and the invite links use them). `/privacy`, `/terms` and
+  `/account-deletion` stay refused.
 
 ### Running it
 
@@ -747,14 +794,19 @@ apps/mobile/
   app.config.ts            env-driven Expo config (validated; see the env table above)
   eas.json                 EAS Build profiles and EAS Update channels
   src/app/                 routes (Expo Router)
-    _layout.tsx            providers, theme, offline banner, root stack
-    index.tsx              redirects to /sign-in (no session handling yet)
-    (auth)/                sign-in, sign-up (stack with headers)
-    (app)/                 items, settings (bottom tabs)
+    _layout.tsx            providers, session gate, app lock, protected root stack
+    index.tsx              redirects to sign-in, the app, or a pending invitation
+    (auth)/                sign-in, sign-up, check-email, forgot-password
+    auth/                  verify-email, reset-password (email deep links)
+    invite/[token].tsx     accept an invitation (deep link)
+    (app)/(tabs)/          items, workspaces, settings (bottom tabs)
+    (app)/                 item/new, item/[id], members, invite-share, workspace-new,
+                           profile, sessions, delete-account (pushed over the tabs)
+  src/features/            auth, items (queue), push, lock, workspaces
   src/components/          Screen, KeyboardAvoidingForm, TextField, Button, NetworkBanner
   src/theme/               design tokens + useTheme (ADR 0006)
   src/lib/                 runtime env, query client, network status, token storage,
-                           API client headers
+                           session store, API wiring, mutation queue
 ```
 
 ### What the foundation provides
@@ -764,7 +816,7 @@ apps/mobile/
   system bars. `Screen` pads with safe-area insets per edge; headers and the tab bar pad
   their own edges. The status bar icons follow the theme.
 - **Android back button.** In the tabs, back returns to the first tab, then leaves the
-  app (`backBehavior="initialRoute"`). "Preview app screens" uses `router.replace`, so
+  app (`backBehavior="initialRoute"`). Signing in uses `router.replace`, so
   back from the tabs doesn't return to sign-in. On sign-up, leaving with unsaved input
   (hardware back, header back, iOS swipe) asks for confirmation (`usePreventRemove`);
   "Discard" clears the input and completes the navigation. `(auth)` is anchored on
@@ -785,7 +837,7 @@ apps/mobile/
   written, and mutations (whose variables can hold passwords) never are. The cache is
   scoped per account: `AppProviders` takes a `cacheScope` (account id, or signed out),
   each scope has its own storage entry, and other scopes' entries are deleted on
-  startup. Sign-out (phase 9b) calls `useClearQueryCache()`: it stops the scope's writes
+  startup. Sign-out calls `useClearQueryCache()`: it stops the scope's writes
   (including throttled writes still queued), waits for writes in flight, then clears
   memory and deletes the entry, so nothing can recreate it. Queries pause offline and
   resume on reconnect; returning to the foreground refetches and re-checks
@@ -795,8 +847,8 @@ apps/mobile/
   appears), and it takes over the top safe-area inset while visible.
 - **Token storage** (`src/lib/token-storage.ts`): typed wrapper over `expo-secure-store`
   (Keychain / Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`). The session (access +
-  refresh token) is one entry, so a failed write never leaves a mixed pair. Nothing
-  stores tokens yet.
+  refresh token) is one entry, so a failed write never leaves a mixed pair. The
+  session store (`src/lib/session.ts`) is the only writer.
 - **Android release hardening.** Android Auto Backup is off (`allowBackup: false`), and
   permissions the app doesn't use (`SYSTEM_ALERT_WINDOW`, `VIBRATE`, legacy external
   storage) are removed from the merged manifest (`blockedPermissions`). A test checks the
@@ -920,4 +972,4 @@ MIT. See [LICENSE](./LICENSE).
 
 ### API client contract
 
-Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile has a Jest import smoke test; Metro bundling and application integration remain unverified.
+Run `make gen-client` after changing API routes or schemas. It exports OpenAPI without a running server and regenerates the TypeScript contract in `packages/api-client`; CI checks both files for drift. The web app uses the shared fetch client. Mobile uses it for all API calls (Jest-tested; Metro bundling has not been run here).
