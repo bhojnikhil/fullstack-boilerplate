@@ -1,40 +1,26 @@
-import Ionicons from "@expo/vector-icons/Ionicons";
-import { Tabs } from "expo-router/js-tabs";
+import { Stack } from "expo-router";
 
-import { useTheme } from "@/theme/use-theme";
+import { QueueProvider } from "@/features/items/queue-provider";
+import { usePushLifecycle } from "@/features/push/use-push";
 
+export const unstable_settings = { anchor: "(tabs)" };
+
+/** Signed-in area: the tabs, plus detail screens pushed on top of them. */
 export default function AppLayout() {
-  const { colors } = useTheme();
-  const iconColor = (focused: boolean) => (focused ? colors.primary : colors.textMuted);
+  usePushLifecycle();
   return (
-    <Tabs
-      // Android back from any tab returns to the first tab, then exits.
-      backBehavior="initialRoute"
-      screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textMuted,
-      }}
-    >
-      <Tabs.Screen
-        name="items"
-        options={{
-          title: "Items",
-          tabBarAccessibilityLabel: "Items",
-          tabBarIcon: ({ focused, size }) => (
-            <Ionicons name="list" color={iconColor(focused)} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarAccessibilityLabel: "Settings",
-          tabBarIcon: ({ focused, size }) => (
-            <Ionicons name="settings-outline" color={iconColor(focused)} size={size} />
-          ),
-        }}
-      />
-    </Tabs>
+    <QueueProvider>
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="item/new" options={{ title: "New item" }} />
+        <Stack.Screen name="item/[id]" options={{ title: "Edit item" }} />
+        <Stack.Screen name="workspace-new" options={{ title: "New workspace" }} />
+        <Stack.Screen name="members" options={{ title: "Members" }} />
+        <Stack.Screen name="invite-share" options={{ title: "Invite people" }} />
+        <Stack.Screen name="profile" options={{ title: "Profile" }} />
+        <Stack.Screen name="sessions" options={{ title: "Sessions" }} />
+        <Stack.Screen name="delete-account" options={{ title: "Delete account" }} />
+      </Stack>
+    </QueueProvider>
   );
 }

@@ -4,6 +4,7 @@ import appConfig, {
   APP_CONFIG_ENV_KEYS,
   APP_VERSION,
   BLOCKED_ANDROID_PERMISSIONS,
+  googleIosUrlScheme,
   isEasContext,
   parseAppEnv,
   runtimeVersionFor,
@@ -35,6 +36,29 @@ describe("parseAppEnv", () => {
       appLinkPaths: [],
       sentryDsn: undefined,
     });
+  });
+
+  it("reads public Google client ids and adds the iOS URL scheme plugin only with the iOS id", () => {
+    const WEB = "123-web.apps.googleusercontent.com";
+    const IOS = "456-ios.apps.googleusercontent.com";
+    const env = parseAppEnv({ GOOGLE_WEB_CLIENT_ID: WEB, GOOGLE_IOS_CLIENT_ID: IOS });
+    expect(env).toMatchObject({ googleWebClientId: WEB, googleIosClientId: IOS });
+    expect(googleIosUrlScheme(IOS)).toBe("com.googleusercontent.apps.456-ios");
+    expect(() => parseAppEnv({ GOOGLE_WEB_CLIENT_ID: "not-a-client-id" })).toThrow(
+      /GOOGLE_WEB_CLIENT_ID/,
+    );
+    const pluginNames = (vars: Record<string, string>) => {
+      Object.assign(process.env, vars);
+      try {
+        return (appConfig(ctx).plugins ?? []).map((p) => (Array.isArray(p) ? p[0] : p));
+      } finally {
+        for (const key of Object.keys(vars)) delete process.env[key];
+      }
+    };
+    expect(pluginNames({})).not.toContain("@react-native-google-signin/google-signin");
+    expect(pluginNames({ GOOGLE_IOS_CLIENT_ID: IOS })).toContain(
+      "@react-native-google-signin/google-signin",
+    );
   });
 
   it("uses unsuffixed ids for production and normalizes the API URL", () => {
