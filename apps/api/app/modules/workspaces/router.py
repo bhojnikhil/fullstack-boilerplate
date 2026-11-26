@@ -248,12 +248,16 @@ async def revoke_invitation(
 
 @invitations_router.post("/accept", responses=NOT_FOUND | CONFLICT | RATE_LIMITED)
 async def accept_invitation(
-    data: InvitationAccept, user: CurrentUser, service: Service, mutation: Mutation
+    data: InvitationAccept, user: CurrentUser, service: Service
 ) -> WorkspaceResponse:
     """Join a workspace with an invitation token (from the emailed or shared link).
 
     404 ``invalid_invitation`` for every unusable token: unknown, expired, revoked,
     already used, or sent to a different email address.
+
+    `Idempotency-Key` replay is not used here (a stored response would outlive the
+    caller's membership). Repeating the call as the member who joined with this token
+    returns the workspace while they are still a member, and 404 afterwards.
     """
     workspace, role = await service.accept_invitation(user, data.token)
-    return mutation.save(WorkspaceResponse.build(workspace, role))
+    return WorkspaceResponse.build(workspace, role)

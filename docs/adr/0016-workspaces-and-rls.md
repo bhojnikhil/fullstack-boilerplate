@@ -42,13 +42,30 @@ proven, when a workspace is being created, or while an invitation is accepted) a
 invitation without belonging to its workspace). The settings are applied with
 `set_config(..., true)` (`SET LOCAL`) at the start of every transaction the session
 begins (`app.core.rls`), so a commit mid-request does not lose them, and a transaction
-that sets nothing sees no tenant rows. The membership check sets `app.workspace_id` in
-the same statement that finds the membership, so the setting exists only for members.
-Memberships can only be inserted by the user for themselves, in the active workspace,
-either as owner of a workspace being created or with a usable invitation of that role.
-`items` additionally requires the user's own membership. What RLS does not do: it trusts
-`app.workspace_id`, so code that sets it for a workspace the user is not in (a bug in the
-two places that set it) would expose that workspace's workspace/membership rows.
+that sets nothing sees no tenant rows. The membership check sets `app.workspace_id` in the same statement that finds the
+membership, so the setting exists only for members, but the policies do not rely on that:
+every policy also requires that `app.user_id` belongs to the row's workspace
+(`app_is_member()`), so a transaction naming someone else's workspace sees and changes
+nothing. Unset, empty and (as an error) malformed settings fail closed. A membership
+subquery inside the memberships policy is rejected by PostgreSQL as recursive, so
+`app_is_member` is a `SECURITY DEFINER` function (pinned search path, executable by the app
+role only) that reads memberships as the owner through one policy, `memberships_owner`,
+that applies to the owner role alone. This is the one place FORCE does not bind the
+owner; `/ready` therefore also refuses a connection by the role that owns the tables.
+Bootstrap paths are narrow: a workspace can be inserted (and read back) by the user named as
+its owner while its id is the active workspace, and its owner membership inserted with
+role `owner` for that workspace; joining is an insert of the user's own membership with the
+role of a usable invitation whose digest is in `app.invitation_hash`. The workspace row
+lock taken while joining is allowed by the same invitation, but changes are not. `items`
+also requires the user's membership. Roles (admin vs member) are enforced by the service,
+not by RLS.
+
+**Re-authorization under the lock.** A request authorizes against committed state, then may
+wait for the workspace lock while another request removes or demotes the caller or moves
+ownership. Every mutating operation therefore locks the workspace row and then reloads the
+caller's membership, requiring the operation's minimum role from that fresh row
+(`WorkspaceService.locked`), before it does anything; decisions (for example who may
+remove an admin) use the fresh role. Tests interleave real requests to cover it.
 
 **Database roles.** The API connects as a non-owner login role (`app_user`,
 `DATABASE_URL`); migrations and test seeding run as the owner (`MIGRATION_DATABASE_URL`).
@@ -72,7 +89,18 @@ invitation (no email) returns the token once for a link or QR code. Every unusab
 the same order as every other membership change, so concurrent accepts, revocations,
 deletions and transfers wait instead of deadlocking. The create-invitation endpoint does not
 use `Idempotency-Key` replay, because a stored response would keep a link token in clear text.
+Accepting does not use replay either: a stored 200 would outlive the membership. It is
+idempotent by state instead (the member who joined with the token gets the workspace again
+while still a member, 404 `invalid_invitation` afterwards).
 Audit events carry ids, roles and reasons only, no emails or names.
+
+An email invitation is delivered through the job queue (ADR 0013), so its payload holds the
+link, including the token, until the job succeeds (then it is deleted) or the retention purge
+removes it (`job_retention_days`, stale and dead jobs alike; tested). Shareable link
+invitations are never queued: the token is returned once to the admin and nowhere else.
+Accepted trade-off: someone with read access to the job table can use a pending emailed
+link for its short life; database read access is already close to full compromise and the
+link is meant to be shared. Encrypting job payloads at rest is a future option, not built.
 
 **Account deletion.** The hook blocks (`409 account_deletion_blocked`,
 `details.reason = "sole_workspace_owner"`) while the user owns a workspace with other

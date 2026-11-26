@@ -390,6 +390,10 @@ export interface paths {
      *
      *     404 ``invalid_invitation`` for every unusable token: unknown, expired, revoked,
      *     already used, or sent to a different email address.
+     *
+     *     `Idempotency-Key` replay is not used here (a stored response would outlive the
+     *     caller's membership). Repeating the call as the member who joined with this token
+     *     returns the workspace while they are still a member, and 404 afterwards.
      */
     post: operations["invitations_accept_invitation"];
     delete?: never;
@@ -2732,9 +2736,7 @@ export interface operations {
   invitations_accept_invitation: {
     parameters: {
       query?: never;
-      header?: {
-        "Idempotency-Key"?: string | null;
-      };
+      header?: never;
       path?: never;
       cookie?: never;
     };

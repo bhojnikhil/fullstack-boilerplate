@@ -618,7 +618,7 @@ invitation).
 Domain data such as `/v1/items` takes the active workspace in the `X-Workspace-Id`
 header. Anything in a workspace the caller does not belong to answers **404**, the same
 as a workspace that does not exist; a member with too low a role gets 403.
-Invitations expire after `INVITATION_EXPIRE_DAYS`, are single use and are stored hashed;
+Invitations expire after `INVITATION_EXPIRE_DAYS`, are single use and are stored hashed (accepting is idempotent by state, not by `Idempotency-Key` replay);
 an email invitation can only be accepted by that verified address. Invitation links are
 `{WEB_URL}/invite#token=...`.
 
@@ -635,7 +635,7 @@ data when the API connects as a role that is neither the table owner nor a super
   pooled URL as `DATABASE_URL`.
 - `alembic upgrade head` must run as the owner. Revision 0005 grants the app role table
   access and refuses a role that is a superuser or has `BYPASSRLS`; `/ready` returns 503
-  in staging and production when the connected role bypasses RLS.
+  in staging and production when the connected role bypasses RLS or owns the tables.
 - Existing databases: revision 0005 moves each user's items into a new "Personal"
   workspace (USD, UTC) that they own, then switches `items.user_id` to the nullable
   `created_by_id`. Take a backup first; downgrading hands items back to their authors.

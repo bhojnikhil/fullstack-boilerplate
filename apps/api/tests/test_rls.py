@@ -246,3 +246,134 @@ def test_tenant_repositories_require_a_workspace_id():
     with pytest.raises(TypeError):
         TenantRepository(None, "not-a-uuid")  # type: ignore[arg-type]
     assert ItemRepository(None, uuid4()).workspace_id  # type: ignore[arg-type]
+
+
+# --- R1-1: a setting alone is never enough ----------------------------------------------
+
+READS = {
+    "workspaces": "id = :b",
+    "memberships": "workspace_id = :b",
+    "invitations": "workspace_id = :b",
+    "items": "workspace_id = :b",
+}
+INSERTS = {
+    "workspaces": "INSERT INTO workspaces (id, name, slug, currency, timezone, owner_id) "
+    "VALUES (gen_random_uuid(), 'x', 'slug-' || gen_random_uuid(), 'USD', 'UTC', :alice)",
+    "memberships": "INSERT INTO memberships (id, workspace_id, user_id, role) "
+    "VALUES (gen_random_uuid(), :b, :alice, 'member')",
+    "memberships (as owner)": "INSERT INTO memberships (id, workspace_id, user_id, role) "
+    "VALUES (gen_random_uuid(), :b, :alice, 'owner')",
+    "invitations": "INSERT INTO invitations (id, workspace_id, role, token_hash, expires_at) "
+    "VALUES (gen_random_uuid(), :b, 'member', 'h', now() + interval '1 day')",
+    "items": "INSERT INTO items (id, workspace_id, title, is_active) "
+    "VALUES (gen_random_uuid(), :b, 't', true)",
+}
+UPDATES = {
+    "workspaces": "UPDATE workspaces SET name = 'hijacked' WHERE id = :b",
+    "memberships": "UPDATE memberships SET role = 'admin' WHERE workspace_id = :b",
+    "invitations": "UPDATE invitations SET role = 'admin' WHERE workspace_id = :b",
+    "items": "UPDATE items SET title = 'hijacked' WHERE workspace_id = :b",
+}
+DELETES = {
+    "workspaces": "DELETE FROM workspaces WHERE id = :b",
+    "memberships": "DELETE FROM memberships WHERE workspace_id = :b",
+    "invitations": "DELETE FROM invitations WHERE workspace_id = :b",
+    "items": "DELETE FROM items WHERE workspace_id = :b",
+}
+# Settings that must never grant access to workspace B's rows. Alice belongs to A only.
+SETTINGS = {
+    "foreign workspace": lambda s: {"user": s.alice.id, "workspace": s.b.id},
+    "foreign workspace, no user": lambda s: {"workspace": s.b.id},
+    "no settings": lambda s: {},
+    "user only": lambda s: {"user": s.alice.id},
+    "workspace only": lambda s: {"workspace": s.a.id},
+    "empty strings": lambda s: {"user": "", "workspace": ""},
+}
+
+
+async def run(engine, seed, setting, statement):
+    connection = await scoped(engine, **SETTINGS[setting](seed))
+    try:
+        result = await connection.execute(
+            text(statement),
+            {"a": seed.a.id, "b": seed.b.id, "alice": seed.alice.id, "bob": seed.bob.id},
+        )
+        return result.rowcount if result.returns_rows is False else len(result.all())
+    finally:
+        await connection.close()
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+@pytest.mark.parametrize("table", READS)
+async def test_b_rows_are_invisible_without_a_matching_user_and_workspace(
+    test_db_engine, seeded, table, setting
+):
+    assert (
+        await run(test_db_engine, seeded, setting, f"SELECT 1 FROM {table} WHERE {READS[table]}")
+        == 0
+    )
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+@pytest.mark.parametrize("table", UPDATES)
+async def test_b_rows_cannot_be_updated_or_deleted(test_db_engine, seeded, table, setting):
+    assert await run(test_db_engine, seeded, setting, UPDATES[table]) == 0
+    assert await run(test_db_engine, seeded, setting, DELETES[table]) == 0
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+@pytest.mark.parametrize("name", INSERTS)
+async def test_rows_cannot_be_inserted_into_b(test_db_engine, seeded, name, setting):
+    with pytest.raises(DBAPIError, match="row-level security"):
+        await run(test_db_engine, seeded, setting, INSERTS[name])
+
+
+async def test_nothing_of_b_survived_the_attempts(owner_engine, seeded, test_db_engine):
+    for setting in SETTINGS:
+        for statement in (*UPDATES.values(), *DELETES.values()):
+            await run(test_db_engine, seeded, setting, statement)
+    async with owner_engine.connect() as connection:
+        counts = [
+            await connection.scalar(
+                text(f"SELECT count(*) FROM {t} WHERE {READS[t]}"), {"b": seeded.b.id}
+            )
+            for t in READS
+        ]
+        name = await connection.scalar(
+            text("SELECT name FROM workspaces WHERE id = :b"), {"b": seeded.b.id}
+        )
+    assert counts == [1, 1, 1, 1] and name == "B"
+
+
+@pytest.mark.parametrize(
+    "bad", [{"user": "not-a-uuid"}, {"user": "x", "workspace": "y"}, {"workspace": "not-a-uuid"}]
+)
+@pytest.mark.parametrize("table", READS)
+async def test_malformed_settings_fail_closed(test_db_engine, seeded, table, bad):
+    """An error or no rows, never rows."""
+    connection = await scoped(test_db_engine, **bad)
+    try:
+        try:
+            rows = (await connection.execute(text(f"SELECT 1 FROM {table}"))).all()
+        except DBAPIError:
+            return
+        assert rows == []
+    finally:
+        await connection.close()
+
+
+async def test_a_member_still_has_access_to_their_own_workspace(test_db_engine, seeded):
+    own = {"user": seeded.alice.id, "workspace": seeded.a.id}
+    connection = await scoped(test_db_engine, **own)
+    try:
+        for table, where in (
+            ("items", "workspace_id = :a"),
+            ("workspaces", "id = :a"),
+            ("memberships", "workspace_id = :a"),
+        ):
+            rows = await connection.execute(
+                text(f"SELECT 1 FROM {table} WHERE {where}"), {"a": seeded.a.id}
+            )
+            assert len(rows.all()) == 1, table
+    finally:
+        await connection.close()
