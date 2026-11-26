@@ -1,8 +1,8 @@
-# ADR 0013: Deploy targets and release workflows
+# ADR 0017: Deploy targets and release workflows
 
 Status: Accepted
 
-The API and the future worker share an image and a database, so they run as process
+The API and the worker share an image and a database, so they run as process
 groups of one Fly.io app. Fly's `release_command` runs Alembic before traffic moves and
 aborts the deploy on failure, which gives migrations an owner-role connection without a
 separate pipeline stage. Postgres is Neon: a pooled URL for the application role and a

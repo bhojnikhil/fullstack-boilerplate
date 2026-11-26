@@ -1,8 +1,12 @@
-# {{APP_NAME}} Full-Stack Boilerplate Context
+# AGENTS.md: {{APP_NAME}} contributor and agent guide
 
-The [README](README.md) describes the auth model, current limitations and local setup.
+`CLAUDE.md` points here. Keep this file accurate when the repo changes.
+
+The [README](README.md) describes the auth model, tenancy, env vars and local setup.
 The API uses FastAPI and async SQLAlchemy with psycopg 3. The web app uses Next.js 16,
-React 19, Tailwind CSS 4, shadcn/ui, axios and Zustand.
+React 19, Tailwind CSS 4, shadcn/ui and Zustand; web and mobile call the API through the
+generated client in `packages/api-client`. Nothing has been deployed or run against real
+third-party services.
 
 ## Layout
 
@@ -16,22 +20,32 @@ apps/api/
   app/jobs/              Postgres job queue, handlers, periodic purge, worker (python -m app.jobs)
   app/modules/devices/   push token registration, sending and receipt processing
   app/modules/auth/      accounts, sessions, tokens, Google sign-in, /v1/auth and /v1/me
-  app/modules/items/     user-scoped CRUD example
   alembic/               database migrations
   tests/                 pytest integration and unit tests
-apps/web/                Next.js pages and axios client
-apps/mobile/             Expo SDK 58 app (foundation: placeholder screens, no API calls yet)
+  app/modules/workspaces/ workspaces, memberships, invitations, role dependencies, account-deletion hook
+  app/modules/items/     workspace-scoped CRUD example (the template for new modules)
+  scripts/seed.py        `make seed`: demo user, workspace and items (ENV=development only)
+apps/web/                Next.js 16 app: public pages, /auth/*, /workspaces, /invite, /account, /items
+  lib/api.ts             wrapper over packages/api-client (access token in memory, cookie refresh)
+apps/mobile/             Expo SDK 58 app on the generated client (auth, items + offline queue,
+                         workspaces, push, biometrics)
   app.config.ts          env-driven, validated Expo config; eas.json build profiles
   src/app/               Expo Router routes: (auth) sign-in/sign-up, (app) items/settings tabs
   src/components/        Screen (safe areas), KeyboardAvoidingForm, TextField, Button, NetworkBanner
   src/lib/               runtime env, persisted query cache, network, token storage, API headers
   src/theme/             design tokens + useTheme (ADR 0006)
+packages/api-client/     generated OpenAPI types + fetch transport (`make gen-client`)
 packages/config/         shared TypeScript, ESLint and Prettier config
 docs/adr/                architecture decisions
-scripts/                 template customization and container checks
+scripts/                 customize.sh, container/compose checks, gen-client, DB bootstrap SQL
+.github/workflows/       ci (path-filtered, `CI gate`), security, pre-commit, deploy, mobile-release, neon-preview
 ```
 
 ## Adding an API module
+
+The README's "Adding a new domain module" is the short recipe; these are the details.
+Every domain table is workspace-scoped with forced RLS, and every route is added to the
+isolation suite. After changing routes or schemas run `make gen-client` and commit its output.
 
 1. Define models in `app/modules/<name>/models.py` and import them in `alembic/env.py`.
    Use UUID primary keys and `created_at` and `updated_at` timestamps for domain entities.
@@ -86,8 +100,9 @@ Conventions added with the auth redesign:
   Refresh tokens rotate on every use; reuse revokes the session. `X-Platform: web` clients
   get the refresh token as an httpOnly cookie on `/v1/auth/refresh` (CSRF: `Origin` allowlist
   plus `X-CSRF-Token`); other clients get it in the body. See ADRs 0008 to 0010.
-- The web pages are at `/auth/login` and `/auth/register`. The web keeps the access token in
-  memory and refreshes it with the cookie.
+- The web keeps the access token in memory and refreshes it with the httpOnly cookie
+  (`/auth/login`, `/auth/register`, ...).
+- Clients branch on error `code` and `details.reason`, never on `message`.
 - `/v1/items` is workspace-scoped: it needs `X-Workspace-Id`, sorts by creation time and UUID,
   and its list response includes `items` and `next_cursor`.
 - Tenancy ([ADR 0016](docs/adr/0016-workspaces-and-rls.md)): workspace-scoped routes depend
@@ -145,7 +160,9 @@ README.md "Mobile" has the run/build instructions and env vars. Conventions:
 ```bash
 ./scripts/customize.sh myapp "My App" myapp.com
 make setup                        # locked uv and pnpm installs
-make up                           # Compose Postgres, explicit migrations, API, web, Mailpit
+make up                           # Compose Postgres, explicit migrations, API, worker, web, Mailpit
+make seed                         # demo@example.com / demo-password-123, a workspace, items
+make gen-client                   # regenerate packages/api-client (CI checks drift)
 make dev                          # Compose Postgres + API, Next.js dev server on host
 make test                         # API tests on dedicated Compose Postgres
 make lint typecheck fmt-check     # Ruff, strict mypy, ESLint, tsc and Prettier
@@ -171,4 +188,9 @@ Pin exact versions and update the corresponding lockfile. Keep local env files a
 build output out of Git. Use [apps/api/.env.example](apps/api/.env.example) for the
 API settings and [apps/web/.env.example](apps/web/.env.example) for web configuration.
 
-The web API client uses `packages/api-client`. Run `make gen-client` after API contract changes; the committed OpenAPI schema and generated TypeScript types are checked for drift in CI. The shared fetch transport leaves token storage and refresh policy to its caller.
+Local gotchas: Node must satisfy the root `engines` (>=26); pnpm 12.23.0 (see README
+Troubleshooting if Corepack fails). On Apple M4 machines containers may exit 132; set
+`OPENSSL_armcap=0` on the api and worker services (README Troubleshooting).
+
+Never commit secrets, `.env` files, caches or DB files; gitleaks runs in pre-commit and CI.
+Never create or use real cloud credentials (Neon, Fly, Expo, Google) from agent sessions.

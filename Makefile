@@ -28,7 +28,7 @@ GREEN := \033[0;32m
 NC := \033[0m
 
 .PHONY: help setup hooks dev up down logs ps build fresh smoke \
-	migrate migrate-compose migration db-shell db-bootstrap \
+	migrate migrate-compose migration db-shell db-bootstrap seed \
 	test lint lint-api lint-web typecheck typecheck-api typecheck-web \
 	fmt fmt-check build-web mobile test-mobile doctor-mobile gen-client
 
@@ -94,6 +94,9 @@ smoke: ## Check the packaged containers, production API and public web pages
 	@printf "$(GREEN)✓ postgres, mailpit, api, worker and web are healthy; api, worker and web are non-root and unmounted$(NC) (stop with: make down)\n"
 
 # ============================== Database ====================================
+
+seed: ## Create demo data (user demo@example.com, a workspace, items) in the running Compose stack
+	$(COMPOSE) exec -T api python -m scripts.seed
 
 db-bootstrap: ## Create the non-owner application role (app_user) in the Compose Postgres
 	$(COMPOSE) up -d --wait postgres
