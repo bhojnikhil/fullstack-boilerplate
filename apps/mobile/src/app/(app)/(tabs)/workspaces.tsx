@@ -62,6 +62,12 @@ export default function Workspaces() {
             onPress={() => router.push("/workspace-new")}
           />
           <Button
+            title="Manage workspace"
+            variant="secondary"
+            disabled={!active}
+            onPress={() => router.push("/workspace-manage")}
+          />
+          <Button
             title="Members"
             variant="secondary"
             disabled={!active}

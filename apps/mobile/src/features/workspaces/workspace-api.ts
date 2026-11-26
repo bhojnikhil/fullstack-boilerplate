@@ -1,81 +1,99 @@
+import type { components } from "@repo/api-client";
 import { unwrap } from "@/lib/api-error";
 import type { AppServices } from "@/lib/app-services";
 
-/**
- * PROVISIONAL contract for workspaces, members and invitations.
- *
- * Phase 5 (workspaces) is not on this branch, so these endpoints are NOT in
- * the generated client. The shapes below follow the v2 spec ("Multi-tenancy")
- * and are an assumption until phase 5 lands: then regenerate the client
- * (`make gen-client`), delete this file and call the typed `api` directly.
- * The one unchecked cast is isolated here on purpose.
- */
-export type Role = "owner" | "admin" | "member";
-
-export interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  currency: string;
-  timezone: string;
-  role: Role;
-}
-
-export interface Member {
-  user_id: string;
-  name: string;
-  /** Only admins and the owner see other members' addresses; null otherwise. */
-  email: string | null;
-  role: Role;
-}
-
-export interface Invitation {
-  /** The one-time secret in the invite link. */
-  token: string;
-  expires_at: string;
-}
-
-interface LooseResult {
-  data?: unknown;
-  error?: unknown;
-  response: Response;
-}
-interface LooseClient {
-  GET(path: string, init?: object): Promise<LooseResult>;
-  POST(path: string, init?: object): Promise<LooseResult>;
-  DELETE(path: string, init?: object): Promise<LooseResult>;
-}
+export type Role = components["schemas"]["InvitableRole"];
 
 export function workspaceApi(api: AppServices["api"]) {
-  const client = api as unknown as LooseClient;
-  const call = <T>(result: Promise<LooseResult>) =>
-    unwrap(result as Promise<{ data?: T; error?: unknown; response: Response }>);
+  const path = (workspace_id: string) => ({ path: { workspace_id } });
   return {
     list: async () => {
-      const page = await call<{ items: Workspace[] }>(client.GET("/v1/workspaces"));
-      return page.items;
+      const items: components["schemas"]["WorkspaceResponse"][] = [];
+      let cursor: string | null = null;
+      do {
+        const page: components["schemas"]["WorkspacePage"] = await unwrap(
+          api.GET("/v1/workspaces", { params: { query: { cursor } } }),
+        );
+        items.push(...page.items);
+        cursor = page.next_cursor;
+      } while (cursor);
+      return items;
     },
-    create: (body: { name: string; currency: string; timezone: string }) =>
-      call<Workspace>(client.POST("/v1/workspaces", { body })),
-    members: async (workspaceId: string) => {
-      const page = await call<{ items: Member[] }>(
-        client.GET(`/v1/workspaces/${encodeURIComponent(workspaceId)}/members`),
-      );
-      return page.items;
-    },
-    removeMember: (workspaceId: string, userId: string) =>
-      call<void>(
-        client.DELETE(
-          `/v1/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
-        ),
+    create: (body: components["schemas"]["WorkspaceCreate"]) =>
+      unwrap(api.POST("/v1/workspaces", { body })),
+    rename: (id: string, name: string) =>
+      unwrap(
+        api.PATCH("/v1/workspaces/{workspace_id}", {
+          params: path(id),
+          body: { name },
+        }),
       ),
-    invite: (workspaceId: string, role: Role) =>
-      call<Invitation>(
-        client.POST(`/v1/workspaces/${encodeURIComponent(workspaceId)}/invitations`, {
+    leave: (id: string) =>
+      unwrap(api.POST("/v1/workspaces/{workspace_id}/leave", { params: path(id) })),
+    delete: (id: string) =>
+      unwrap(api.DELETE("/v1/workspaces/{workspace_id}", { params: path(id) })),
+    transfer: (id: string, user_id: string) =>
+      unwrap(
+        api.POST("/v1/workspaces/{workspace_id}/transfer-ownership", {
+          params: path(id),
+          body: { user_id },
+        }),
+      ),
+    members: async (id: string) => {
+      const items: components["schemas"]["MemberResponse"][] = [];
+      let cursor: string | null = null;
+      do {
+        const page: components["schemas"]["MemberPage"] = await unwrap(
+          api.GET("/v1/workspaces/{workspace_id}/members", {
+            params: { ...path(id), query: { cursor } },
+          }),
+        );
+        items.push(...page.items);
+        cursor = page.next_cursor;
+      } while (cursor);
+      return items;
+    },
+    removeMember: (workspace_id: string, user_id: string) =>
+      unwrap(
+        api.DELETE("/v1/workspaces/{workspace_id}/members/{user_id}", {
+          params: { path: { workspace_id, user_id } },
+        }),
+      ),
+    changeRole: (workspace_id: string, user_id: string, role: Role) =>
+      unwrap(
+        api.PATCH("/v1/workspaces/{workspace_id}/members/{user_id}", {
+          params: { path: { workspace_id, user_id } },
           body: { role },
         }),
       ),
+    invite: (id: string, role: Role, email?: string) =>
+      unwrap(
+        api.POST("/v1/workspaces/{workspace_id}/invitations", {
+          params: path(id),
+          body: { role, email: email || null },
+        }),
+      ),
+    invitations: async (id: string) => {
+      const items: components["schemas"]["InvitationResponse"][] = [];
+      let cursor: string | null = null;
+      do {
+        const page: components["schemas"]["InvitationPage"] = await unwrap(
+          api.GET("/v1/workspaces/{workspace_id}/invitations", {
+            params: { ...path(id), query: { cursor } },
+          }),
+        );
+        items.push(...page.items);
+        cursor = page.next_cursor;
+      } while (cursor);
+      return items;
+    },
+    revoke: (workspace_id: string, invitation_id: string) =>
+      unwrap(
+        api.DELETE("/v1/workspaces/{workspace_id}/invitations/{invitation_id}", {
+          params: { path: { workspace_id, invitation_id } },
+        }),
+      ),
     acceptInvitation: (token: string) =>
-      call<Workspace>(client.POST("/v1/invitations/accept", { body: { token } })),
+      unwrap(api.POST("/v1/invitations/accept", { body: { token } })),
   };
 }

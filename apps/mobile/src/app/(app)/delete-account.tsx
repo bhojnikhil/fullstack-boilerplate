@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { useState } from "react";
 
 import { Button } from "@/components/button";
@@ -61,6 +62,13 @@ export default function DeleteAccount() {
           />
         ) : null}
         <ErrorText message={remove.error} />
+        {remove.error?.includes("Transfer or delete") ? (
+          <Button
+            title="Manage workspaces"
+            variant="secondary"
+            onPress={() => router.replace("/workspaces")}
+          />
+        ) : null}
         <Button
           title={remove.pending ? "Deleting…" : "Delete my account"}
           disabled={
