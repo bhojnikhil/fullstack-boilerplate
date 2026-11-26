@@ -117,3 +117,18 @@ def test_dockerfile_uses_stdlib_probe() -> None:
     cmd = match.group("cmd")
     assert "healthcheck.py" in cmd
     assert "requests" not in cmd
+
+
+def test_heartbeat_probe_checks_file_age(tmp_path):
+    import os
+
+    check_heartbeat, main = healthcheck.check_heartbeat, healthcheck.main
+    beat = tmp_path / "beat"
+    assert check_heartbeat(str(beat), 60) == 1  # missing file
+    beat.touch()
+    assert check_heartbeat(str(beat), 60) == 0
+    old = time.time() - 120
+    os.utime(beat, (old, old))
+    assert check_heartbeat(str(beat), 60) == 1
+    assert main(["healthcheck.py", "--heartbeat", str(beat), "600"]) == 0
+    assert main(["healthcheck.py", "--heartbeat"]) == 2

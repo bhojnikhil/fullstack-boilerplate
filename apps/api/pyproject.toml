@@ -23,6 +23,7 @@ dependencies = [
     "google-auth==2.63.1",
     # IANA zone data for validating workspace timezones on any platform.
     "tzdata==2026.6",
+    "sentry-sdk==3.0.1",
 ]
 
 [dependency-groups]

@@ -350,3 +350,11 @@ def test_missing_test_secret_is_explained(database_url):
     )
     assert process.returncode != 0
     assert "Set SECRET_KEY to a random test secret" in process.stdout
+
+
+def test_blank_optional_values_in_the_environment_mean_unset(monkeypatch):
+    for name in ("STORAGE_ENDPOINT_URL", "SENTRY_DSN", "RESEND_API_KEY", "EXPO_ACCESS_TOKEN"):
+        monkeypatch.setenv(name, "")
+    config = Settings(_env_file=None, **TEST_SETTINGS)
+    assert config.storage_endpoint_url is None
+    assert config.sentry_dsn is None or not config.sentry_dsn.get_secret_value()

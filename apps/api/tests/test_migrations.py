@@ -250,8 +250,8 @@ async def test_0003_downgrade_does_not_restore_neutralized_links(empty_db_engine
     assert subjects == ["linked"]
 
 
-async def test_0004_moves_items_into_personal_workspaces_and_back(empty_db_engine):
-    await migrate(empty_db_engine, command.upgrade, "0003")
+async def test_0005_moves_items_into_personal_workspaces_and_back(empty_db_engine):
+    await migrate(empty_db_engine, command.upgrade, "0004")
     first, second, lonely = uuid4(), uuid4(), uuid4()
     async with empty_db_engine.begin() as connection:
         for user, email in ((first, "a@x.com"), (second, "b@x.com"), (lonely, "c@x.com")):
@@ -296,7 +296,7 @@ async def test_0004_moves_items_into_personal_workspaces_and_back(empty_db_engin
         ("two", True),
     ]
 
-    await migrate(empty_db_engine, command.downgrade, "0003")
+    await migrate(empty_db_engine, command.downgrade, "0004")
     async with empty_db_engine.connect() as connection:
         restored = (
             await connection.execute(text("SELECT title, user_id FROM items ORDER BY title"))
@@ -305,7 +305,7 @@ async def test_0004_moves_items_into_personal_workspaces_and_back(empty_db_engin
     await migrate(empty_db_engine, command.upgrade, "head")
 
 
-async def test_0004_refuses_an_application_role_that_bypasses_row_level_security(
+async def test_0005_refuses_an_application_role_that_bypasses_row_level_security(
     empty_db_engine, monkeypatch
 ):
     import sqlalchemy.exc
