@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { FormError, TextField } from "@/components/form";
 import { Button } from "@/components/ui/button";
@@ -47,8 +47,17 @@ export default function AccountPage() {
     try {
       await action();
       setNotice(success);
-    } catch {
-      setError("The request failed. Check your details and try again.");
+    } catch (cause) {
+      const message =
+        cause instanceof ApiError
+          ? (cause.body as { error?: { message?: unknown } } | undefined)?.error
+              ?.message
+          : undefined;
+      setError(
+        typeof message === "string"
+          ? message
+          : "The request failed. Check your details and try again.",
+      );
       setFailures((n) => n + 1);
     } finally {
       setBusy(false);
