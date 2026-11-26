@@ -8,7 +8,7 @@ from app.core.idempotency import IdempotencyRecord
 from app.modules.auth.models import User
 from app.modules.items.models import Item
 from app.modules.items.service import ItemService
-from tests.conftest import bearer, sign_in
+from tests.conftest import bearer, create_workspace, in_workspace, sign_in
 from tests.test_http_contract import assert_error
 
 
@@ -16,17 +16,17 @@ def keyed(headers, key="test-resource-key"):
     return {**headers, "Idempotency-Key": key}
 
 
-async def test_replays_create_update_delete_and_profile(client, auth_headers):
-    create_key = keyed(auth_headers, "create")
+async def test_replays_create_update_delete_and_profile(client, ws_headers):
+    create_key = keyed(ws_headers, "create")
     create = await client.post("/v1/items", headers=create_key, json={"title": "first version"})
     assert create.status_code == 201
     item_id = create.json()["id"]
     path = f"/v1/items/{item_id}"
-    update_key = keyed(auth_headers, "patch")
+    update_key = keyed(ws_headers, "patch")
     edited = await client.patch(path, headers=update_key, json={"title": "second version"})
     assert edited.status_code == 200
     assert edited.json()["title"] == "second version"
-    assert (await client.get(path, headers=auth_headers)).json() == edited.json()
+    assert (await client.get(path, headers=ws_headers)).json() == edited.json()
 
     create_replay = await client.post(
         "/v1/items", headers=create_key, json={"title": "first version"}
@@ -37,16 +37,16 @@ async def test_replays_create_update_delete_and_profile(client, auth_headers):
     assert (
         await client.patch(path, headers=update_key, json={"title": "second version"})
     ).json() == edited.json()
-    assert len((await client.get("/v1/items", headers=auth_headers)).json()["items"]) == 1
+    assert len((await client.get("/v1/items", headers=ws_headers)).json()["items"]) == 1
 
-    delete_key = keyed(auth_headers, "delete")
+    delete_key = keyed(ws_headers, "delete")
     for _ in range(2):
         deleted = await client.delete(path, headers=delete_key)
         assert deleted.status_code == 204
         assert deleted.content == b""
-    assert_error(await client.get(path, headers=auth_headers), 404, "item_not_found")
+    assert_error(await client.get(path, headers=ws_headers), 404, "item_not_found")
 
-    profile_key = keyed(auth_headers, "profile")
+    profile_key = keyed(ws_headers, "profile")
     profile = await client.patch("/v1/me", headers=profile_key, json={"name": "Updated"})
     assert profile.status_code == 200
     assert profile.json()["name"] == "Updated"
@@ -55,8 +55,8 @@ async def test_replays_create_update_delete_and_profile(client, auth_headers):
     ).json() == profile.json()
 
 
-async def test_rejects_key_reuse_for_another_payload_or_target(client, auth_headers):
-    headers = keyed(auth_headers)
+async def test_rejects_key_reuse_for_another_payload_or_target(client, ws_headers):
+    headers = keyed(ws_headers)
     created = await client.post("/v1/items", headers=headers, json={"title": "one"})
     assert created.status_code == 201
     mismatch = await client.post("/v1/items", headers=headers, json={"title": "two"})
@@ -68,21 +68,21 @@ async def test_rejects_key_reuse_for_another_payload_or_target(client, auth_head
     )
     assert_error(mismatch, 422, "idempotency_mismatch")
     assert_error(
-        await client.post("/v1/items", headers=keyed(auth_headers, "x" * 129), json={"title": "x"}),
+        await client.post("/v1/items", headers=keyed(ws_headers, "x" * 129), json={"title": "x"}),
         422,
         "invalid_idempotency_key",
     )
     assert_error(
-        await client.post("/v1/items", headers=keyed(auth_headers, ""), json={"title": "x"}),
+        await client.post("/v1/items", headers=keyed(ws_headers, ""), json={"title": "x"}),
         422,
         "invalid_idempotency_key",
     )
 
 
 async def test_idempotency_ignores_content_type_parameters_but_hashes_exact_body(
-    client, auth_headers
+    client, ws_headers
 ):
-    headers = keyed(auth_headers)
+    headers = keyed(ws_headers)
     url = "/v1/items"
     body = b'{"title":"one"}'
     created = await client.post(
@@ -97,20 +97,45 @@ async def test_idempotency_ignores_content_type_parameters_but_hashes_exact_body
     assert_error(changed, 422, "idempotency_mismatch")
 
 
-async def test_same_key_is_independent_between_users(client, auth_headers, config, session_factory):
+async def test_same_key_is_independent_between_users(
+    client, ws_headers, config, session_factory, owner_sessions, workspace
+):
     async with session_factory.begin() as session:
         other = User(email="other@example.com", name="Other")
         session.add(other)
-    other_headers = bearer(await sign_in(session_factory, config, other))
-    first = await client.post("/v1/items", headers=keyed(auth_headers), json={"title": "one"})
+    other_workspace = await create_workspace(owner_sessions, other, name="Other")
+    other_token = bearer(await sign_in(session_factory, config, other))
+    other_headers = in_workspace(other_token, other_workspace)
+    first = await client.post("/v1/items", headers=keyed(ws_headers), json={"title": "one"})
     second = await client.post("/v1/items", headers=keyed(other_headers), json={"title": "two"})
     assert second.status_code == first.status_code == 201
     assert second.json()["id"] != first.json()["id"]
-    forbidden = await client.get(f"/v1/items/{first.json()['id']}", headers=other_headers)
-    assert_error(forbidden, 403, "item_forbidden")
+    # Another user's item is not found, in their workspace or by naming the first one.
+    not_found = await client.get(f"/v1/items/{first.json()['id']}", headers=other_headers)
+    assert_error(not_found, 404, "item_not_found")
+    foreign = await client.get(
+        f"/v1/items/{first.json()['id']}", headers=in_workspace(other_token, workspace)
+    )
+    assert_error(foreign, 404, "workspace_not_found")
 
 
-async def test_concurrent_duplicate_returns_conflict(client, auth_headers, monkeypatch):
+async def test_idempotency_key_is_bound_to_the_workspace(
+    client, ws_headers, test_user, owner_sessions, auth_headers
+):
+    """The same key and body in another workspace is a different request, never a replay."""
+    second = await create_workspace(owner_sessions, test_user, name="Second")
+    headers = keyed(ws_headers)
+    created = await client.post("/v1/items", headers=headers, json={"title": "one"})
+    assert created.status_code == 201
+    elsewhere = await client.post(
+        "/v1/items", headers=keyed(in_workspace(auth_headers, second)), json={"title": "one"}
+    )
+    assert_error(elsewhere, 422, "idempotency_mismatch")
+    listed = await client.get("/v1/items", headers=in_workspace(auth_headers, second))
+    assert listed.json()["items"] == []
+
+
+async def test_concurrent_duplicate_returns_conflict(client, ws_headers, monkeypatch):
     writes_flushed = asyncio.Event()
     finish_write = asyncio.Event()
     create_item = ItemService.create_item
@@ -122,7 +147,7 @@ async def test_concurrent_duplicate_returns_conflict(client, auth_headers, monke
         return item
 
     monkeypatch.setattr(ItemService, "create_item", hold_after_write)
-    headers = keyed(auth_headers)
+    headers = keyed(ws_headers)
     async with asyncio.timeout(5), asyncio.TaskGroup() as tasks:
         first = tasks.create_task(client.post("/v1/items", headers=headers, json={"title": "one"}))
         await writes_flushed.wait()
@@ -132,11 +157,11 @@ async def test_concurrent_duplicate_returns_conflict(client, auth_headers, monke
     assert first.result().status_code == 201
     replay = await client.post("/v1/items", headers=headers, json={"title": "one"})
     assert replay.json() == first.result().json()
-    assert len((await client.get("/v1/items", headers=auth_headers)).json()["items"]) == 1
+    assert len((await client.get("/v1/items", headers=ws_headers)).json()["items"]) == 1
 
 
-async def test_expired_key_can_be_reused(client, auth_headers, session_factory):
-    headers = keyed(auth_headers)
+async def test_expired_key_can_be_reused(client, ws_headers, session_factory):
+    headers = keyed(ws_headers)
     first = await client.post("/v1/items", headers=headers, json={"title": "one"})
     assert first.status_code == 201
     async with session_factory.begin() as session:
@@ -151,7 +176,7 @@ async def test_expired_key_can_be_reused(client, auth_headers, session_factory):
 
 
 async def test_failed_mutation_rolls_back_before_retry(
-    client, auth_headers, session_factory, monkeypatch
+    client, ws_headers, session_factory, owner_sessions, monkeypatch
 ):
     create_item = ItemService.create_item
 
@@ -159,12 +184,12 @@ async def test_failed_mutation_rolls_back_before_retry(
         await create_item(self, user_id, data)
         raise RuntimeError("insert failed during request processing")
 
-    headers = keyed(auth_headers)
+    headers = keyed(ws_headers)
     with monkeypatch.context() as patch:
         patch.setattr(ItemService, "create_item", fail_after_insert)
         failed = await client.post("/v1/items", headers=headers, json={"title": "before retry"})
         assert_error(failed, 500, "internal_error")
-    async with session_factory() as session:
+    async with owner_sessions() as session:
         assert await session.scalar(select(IdempotencyRecord)) is None
         assert await session.scalar(select(Item)) is None
 
@@ -173,42 +198,50 @@ async def test_failed_mutation_rolls_back_before_retry(
 
 
 async def test_pagination_ties_and_deleted_cursor_anchor(
-    client, auth_headers, session_factory, test_user
+    client, ws_headers, owner_sessions, test_user, workspace
 ):
     ids = sorted([uuid4() for _ in range(5)], reverse=True)
-    async with session_factory.begin() as session:
+    async with owner_sessions.begin() as session:
         # Postgres now() is the same for every insert in this transaction.
         session.add_all(
-            [Item(id=item_id, user_id=test_user.id, title=str(item_id)) for item_id in ids]
+            [
+                Item(
+                    id=item_id,
+                    workspace_id=workspace.id,
+                    created_by_id=test_user.id,
+                    title=str(item_id),
+                )
+                for item_id in ids
+            ]
         )
 
-    first = await client.get("/v1/items", params={"limit": 2}, headers=auth_headers)
+    first = await client.get("/v1/items", params={"limit": 2}, headers=ws_headers)
     assert first.status_code == 200
     assert [item["id"] for item in first.json()["items"]] == list(map(str, ids[:2]))
     cursor = first.json()["next_cursor"]
     assert cursor
-    assert (await client.delete(f"/v1/items/{ids[1]}", headers=auth_headers)).status_code == 204
+    assert (await client.delete(f"/v1/items/{ids[1]}", headers=ws_headers)).status_code == 204
 
     second = await client.get(
-        "/v1/items", params={"limit": 2, "cursor": cursor}, headers=auth_headers
+        "/v1/items", params={"limit": 2, "cursor": cursor}, headers=ws_headers
     )
     assert second.status_code == 200
     assert [item["id"] for item in second.json()["items"]] == list(map(str, ids[2:4]))
 
     last = await client.get(
-        "/v1/items", params={"cursor": second.json()["next_cursor"]}, headers=auth_headers
+        "/v1/items", params={"cursor": second.json()["next_cursor"]}, headers=ws_headers
     )
     assert [item["id"] for item in last.json()["items"]] == [str(ids[4])]
     assert last.json()["next_cursor"] is None
 
     for limit in (0, 101):
         assert_error(
-            await client.get("/v1/items", params={"limit": limit}, headers=auth_headers),
+            await client.get("/v1/items", params={"limit": limit}, headers=ws_headers),
             422,
             "validation_error",
         )
     assert_error(
-        await client.get("/v1/items", params={"cursor": "not-a-cursor!"}, headers=auth_headers),
+        await client.get("/v1/items", params={"cursor": "not-a-cursor!"}, headers=ws_headers),
         422,
         "invalid_cursor",
     )

@@ -27,6 +27,7 @@ class Template(StrEnum):
     PASSWORD_CHANGED = "password_changed"
     ACCOUNT_EXISTS = "account_exists"
     ACCOUNT_DELETED = "account_deleted"
+    WORKSPACE_INVITATION = "workspace_invitation"
 
 
 SUBJECTS = {
@@ -39,6 +40,7 @@ SUBJECTS = {
     Template.PASSWORD_CHANGED: "Your $app_name password was changed",
     Template.ACCOUNT_EXISTS: "You already have a $app_name account",
     Template.ACCOUNT_DELETED: "Your $app_name account was deleted",
+    Template.WORKSPACE_INVITATION: "You are invited to join a workspace on $app_name",
 }
 
 

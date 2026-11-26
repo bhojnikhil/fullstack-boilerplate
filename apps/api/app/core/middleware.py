@@ -68,6 +68,9 @@ class RequestContextMiddleware:
             }
             if "user_id" in state:
                 fields["user_id"] = state["user_id"]
+            if "workspace_id" in state:
+                # Set only after membership was proven, never from an unchecked header.
+                fields["workspace_id"] = state["workspace_id"]
             log.info("http_request", **fields)
             structlog.contextvars.reset_contextvars(**context)
 

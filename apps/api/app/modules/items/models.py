@@ -1,6 +1,8 @@
 """
-Item model - Example CRUD entity.
-Replace this with your domain entity (Product, Post, Todo, etc.)
+Item model - Example workspace-scoped CRUD entity.
+Replace this with your domain entity (Product, Post, Todo, etc.). It shows the tenant
+pattern: a ``workspace_id`` column, an index that starts with it, and row-level security
+in the migration that created it.
 """
 
 import uuid
@@ -19,10 +21,14 @@ class Item(Base, UUIDMixin, TimestampMixin):
     """
 
     __tablename__ = "items"
-    __table_args__ = (Index("ix_items_user_created_id", "user_id", "created_at", "id"),)
+    __table_args__ = (Index("ix_items_workspace_created_id", "workspace_id", "created_at", "id"),)
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    # Kept when the author leaves or deletes their account: the item belongs to the workspace.
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

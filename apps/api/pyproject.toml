@@ -21,6 +21,8 @@ dependencies = [
     "pwdlib[argon2,bcrypt]==0.4.2",
     "pyjwt==2.15.1",
     "google-auth==2.63.1",
+    # IANA zone data for validating workspace timezones on any platform.
+    "tzdata==2026.6",
 ]
 
 [dependency-groups]

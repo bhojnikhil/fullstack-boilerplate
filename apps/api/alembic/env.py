@@ -13,6 +13,7 @@ from app.core.models import Base
 from app.core.ratelimit import RateLimitWindow  # noqa: F401
 from app.modules.auth.models import User  # noqa: F401
 from app.modules.items.models import Item  # noqa: F401
+from app.modules.workspaces.models import Invitation, Membership, Workspace  # noqa: F401
 
 # this is the Alembic Config object
 config = context.config

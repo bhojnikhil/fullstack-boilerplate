@@ -3,11 +3,11 @@
 from httpx import AsyncClient
 
 
-async def test_create_item(client: AsyncClient, auth_headers: dict[str, str]):
+async def test_create_item(client: AsyncClient, ws_headers: dict[str, str]):
     """Test creating an item."""
     response = await client.post(
         "/v1/items",
-        headers=auth_headers,
+        headers=ws_headers,
         json={
             "title": "Test Item",
             "description": "Test Description",
@@ -20,12 +20,12 @@ async def test_create_item(client: AsyncClient, auth_headers: dict[str, str]):
     assert data["description"] == "Test Description"
 
 
-async def test_get_items(client: AsyncClient, auth_headers: dict[str, str]):
+async def test_get_items(client: AsyncClient, ws_headers: dict[str, str]):
     """Test getting items."""
     # Create an item first
     await client.post(
         "/v1/items",
-        headers=auth_headers,
+        headers=ws_headers,
         json={
             "title": "Test Item",
             "description": "Test Description",
@@ -33,7 +33,7 @@ async def test_get_items(client: AsyncClient, auth_headers: dict[str, str]):
     )
 
     # Get items
-    response = await client.get("/v1/items", headers=auth_headers)
+    response = await client.get("/v1/items", headers=ws_headers)
 
     assert response.status_code == 200
     data = response.json()["items"]
