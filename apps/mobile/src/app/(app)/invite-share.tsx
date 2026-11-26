@@ -20,6 +20,7 @@ export default function InviteShare() {
   const [link, setLink] = useState<string | null>(null);
   const create = useSubmit(async () => {
     const invitation = await client.invite(active!.id, "member");
+    if (!invitation.token) throw new Error("The server did not return a link token.");
     setLink(buildInviteLink(invitation.token));
   });
 
