@@ -7,6 +7,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Request
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -14,6 +15,7 @@ from app.core.db import get_session_factory
 from app.core.errors import DomainError, ErrorCode, ErrorEnvelope
 
 router = APIRouter(tags=["health"])
+BYPASSES_RLS = text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
 log = structlog.get_logger()
 reported_unknown_sets: set[frozenset[str]] = set()
 reported_unknown_sets_lock = Lock()
@@ -51,8 +53,14 @@ async def readiness_check(request: Request) -> dict[str, str]:
         async with timeout(3), get_session_factory(request)() as session:
             connection = await session.connection()
             heads = await connection.run_sync(applied_heads)
+            bypasses_rls = await session.scalar(BYPASSES_RLS)
     except (SQLAlchemyError, TimeoutError) as err:
         raise DomainError(ErrorCode.NOT_READY) from err
+    if bypasses_rls and not request.app.state.settings.local:
+        # Row-level security does not apply to superusers and BYPASSRLS roles, so a
+        # deployment connecting as one would silently lose its tenant isolation backstop.
+        log.error("database_role_bypasses_row_level_security")
+        raise DomainError(ErrorCode.NOT_READY)
     shipped_heads, known_revisions = request.app.state.shipped_revisions
     if not heads or heads & (known_revisions - shipped_heads):
         raise DomainError(ErrorCode.NOT_READY)
