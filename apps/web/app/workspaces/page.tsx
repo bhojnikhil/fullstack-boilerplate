@@ -1,14 +1,20 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import type { components } from "@repo/api-client";
-import { api, getActiveWorkspace, setActiveWorkspace } from "@/lib/api";
+import { api, ApiError, getActiveWorkspace, setActiveWorkspace } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { FormError, TextField } from "@/components/form";
+import { GoogleReauthenticate } from "@/components/google-reauthenticate";
 import { Button } from "@/components/ui/button";
 
+// ISO 4217 currencies accepted by the workspace API; update with ISO amendments.
+const CURRENCIES =
+  `AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VES VND VUV WST XAF XCD XOF XPF YER ZAR ZMW ZWG`.split(
+    " ",
+  );
 type Workspace = components["schemas"]["WorkspaceResponse"];
 type Member = components["schemas"]["MemberResponse"];
 type Invitation = components["schemas"]["InvitationResponse"];
@@ -22,6 +28,13 @@ export default function WorkspacesPage() {
   const [memberCursor, setMemberCursor] = useState<string | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [invitationCursor, setInvitationCursor] = useState<string | null>(null);
+  const selectedRef = useRef("");
+  const [currency, setCurrency] = useState("USD");
+  const [timezone, setTimezone] = useState("UTC");
+  const [rename, setRename] = useState("");
+  const [ownershipPassword, setOwnershipPassword] = useState("");
+  const [transferTo, setTransferTo] = useState("");
+  const [verified, setVerified] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "member">("member");
@@ -33,6 +46,30 @@ export default function WorkspacesPage() {
   const [busy, setBusy] = useState(false);
   const active = workspaces.find((w) => w.id === selected);
   const admin = active?.role === "owner" || active?.role === "admin";
+  function selectWorkspace(id: string) {
+    selectedRef.current = id;
+    setMembers([]);
+    setMemberCursor(null);
+    setInvitations([]);
+    setInvitationCursor(null);
+    setLink("");
+    setQr("");
+    setRename("");
+    setTransferTo("");
+    setOwnershipPassword("");
+    setVerified(false);
+    setSelected(id);
+    setActiveWorkspace(id || null);
+  }
+  async function confirmOwnership() {
+    if (user?.sign_in_methods.includes("password")) {
+      try {
+        await api.reauthenticate({ password: ownershipPassword });
+      } finally {
+        setOwnershipPassword("");
+      }
+    } else if (!verified) throw new Error("Verify your identity with Google first.");
+  }
   async function run(action: () => Promise<void>, success = "") {
     setBusy(true);
     setError("");
@@ -56,33 +93,73 @@ export default function WorkspacesPage() {
         .catch(() => setError("Could not restore your session."));
       return;
     }
+    let alive = true;
     void api
       .workspaces()
-      .then((page) => {
+      .then(async (page) => {
+        if (!alive) return;
         setWorkspaces(page.items);
         setWorkspaceCursor(page.next_cursor);
-        setSelected(getActiveWorkspace() || "");
+        const id = getActiveWorkspace();
+        if (!id) return;
+        let current = page.items.find((w) => w.id === id);
+        if (!current) {
+          try {
+            current = await api.workspace(id);
+            if (!alive) return;
+            setWorkspaces((v) => [...v, current!]);
+          } catch (err) {
+            if (!alive) return;
+            if (err instanceof ApiError && err.status === 404) {
+              setActiveWorkspace(null);
+              return;
+            }
+            throw err;
+          }
+        }
+        selectedRef.current = id;
+        setSelected(id);
       })
-      .catch(() => setError("Could not load workspaces."));
+      .catch(() => {
+        if (alive) setError("Could not load workspaces.");
+      });
+    return () => {
+      alive = false;
+    };
   }, [user, restoreSession, router]);
   useEffect(() => {
     if (!selected || !active) return;
+    let alive = true;
     void api
       .members(selected)
       .then((page) => {
-        setMembers(page.items);
-        setMemberCursor(page.next_cursor);
+        if (alive && selectedRef.current === selected) {
+          setMembers(page.items);
+          setMemberCursor(page.next_cursor);
+        }
       })
-      .catch(() => setError("Could not load members."));
+      .catch(() => {
+        if (alive && selectedRef.current === selected)
+          setError("Could not load members.");
+      });
     if (admin)
       void api
         .invitations(selected)
         .then((page) => {
-          setInvitations(page.items);
-          setInvitationCursor(page.next_cursor);
+          if (alive && selectedRef.current === selected) {
+            setInvitations(page.items);
+            setInvitationCursor(page.next_cursor);
+          }
         })
-        .catch(() => setError("Could not load invitations."));
-  }, [selected, active, admin]);
+        .catch(() => {
+          if (alive && selectedRef.current === selected)
+            setError("Could not load invitations.");
+        });
+    return () => {
+      alive = false;
+    };
+  }, [selected, active?.id, active?.role, admin]);
+
   if (!user) return error ? <p role="alert">{error}</p> : null;
   return (
     <div className="mx-auto grid max-w-2xl gap-7">
@@ -94,10 +171,9 @@ export default function WorkspacesPage() {
         onSubmit={(e) => {
           e.preventDefault();
           void run(async () => {
-            const w = await api.createWorkspace(name);
+            const w = await api.createWorkspace(name, currency, timezone);
             setWorkspaces((v) => [w, ...v]);
-            setActiveWorkspace(w.id);
-            setSelected(w.id);
+            selectWorkspace(w.id);
             setName("");
           }, "Workspace created.");
         }}
@@ -109,6 +185,35 @@ export default function WorkspacesPage() {
           onChange={(e) => setName(e.target.value)}
           required
         />
+        <label htmlFor="currency">Currency</label>
+        <select
+          id="currency"
+          className="rounded-md border bg-background p-2"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+        >
+          {CURRENCIES.map((code) => (
+            <option key={code} value={code}>
+              {code}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="timezone">Time zone</label>
+        <select
+          id="timezone"
+          className="rounded-md border bg-background p-2"
+          value={timezone}
+          onChange={(e) => setTimezone(e.target.value)}
+        >
+          <option value="UTC">UTC</option>
+          {Intl.supportedValuesOf("timeZone")
+            .filter((zone) => zone !== "UTC")
+            .map((zone) => (
+              <option key={zone} value={zone}>
+                {zone}
+              </option>
+            ))}
+        </select>
         <Button disabled={busy}>Create workspace</Button>
       </form>
       <section className="grid gap-3">
@@ -120,12 +225,9 @@ export default function WorkspacesPage() {
             </span>
             <Button
               variant="secondary"
-              onClick={() => {
-                setActiveWorkspace(w.id);
-                setSelected(w.id);
-                setLink("");
-                setQr("");
-              }}
+              aria-label={`Switch to ${w.name}`}
+              disabled={busy}
+              onClick={() => selectWorkspace(w.id)}
             >
               Switch
             </Button>
@@ -152,7 +254,124 @@ export default function WorkspacesPage() {
         )}
       </section>
       {active && (
-        <>
+        <div key={selected} className="grid gap-7">
+          <section className="grid gap-3">
+            <h2 className="text-xl font-semibold">Manage {active.name}</h2>
+            {admin && (
+              <form
+                className="grid gap-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run(async () => {
+                    const w = await api.renameWorkspace(selected, rename);
+                    setWorkspaces((v) => v.map((x) => (x.id === w.id ? w : x)));
+                    setRename("");
+                  }, "Workspace renamed.");
+                }}
+              >
+                <TextField
+                  label="New workspace name"
+                  value={rename}
+                  onChange={(e) => setRename(e.target.value)}
+                  required
+                />
+                <Button disabled={busy}>Rename workspace</Button>
+              </form>
+            )}
+            {active.role !== "owner" && (
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  if (window.confirm(`Leave ${active.name}?`))
+                    void run(async () => {
+                      await api.leaveWorkspace(selected);
+                      setWorkspaces((v) => v.filter((w) => w.id !== selected));
+                      selectWorkspace("");
+                    }, "Workspace left.");
+                }}
+              >
+                Leave {active.name}
+              </Button>
+            )}
+            {active.role === "owner" && (
+              <>
+                {user.sign_in_methods.includes("password") ? (
+                  <TextField
+                    label="Password for ownership changes"
+                    type="password"
+                    autoComplete="current-password"
+                    value={ownershipPassword}
+                    onChange={(e) => setOwnershipPassword(e.target.value)}
+                  />
+                ) : (
+                  <>
+                    <GoogleReauthenticate onVerified={() => setVerified(true)} />
+                    {verified && <p role="status">Identity verified.</p>}
+                    <p>
+                      You can also{" "}
+                      <Link href="/auth/forgot-password" className="underline">
+                        recover your password
+                      </Link>
+                      .
+                    </p>
+                  </>
+                )}
+                <label htmlFor="transfer">Transfer ownership to</label>
+                <select
+                  id="transfer"
+                  className="rounded-md border bg-background p-2"
+                  value={transferTo}
+                  onChange={(e) => setTransferTo(e.target.value)}
+                >
+                  <option value="">Choose a member</option>
+                  {members
+                    .filter((m) => m.user_id !== user.id)
+                    .map((m) => (
+                      <option key={m.user_id} value={m.user_id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </select>
+                <Button
+                  disabled={
+                    busy ||
+                    !transferTo ||
+                    (!user.sign_in_methods.includes("password") && !verified)
+                  }
+                  onClick={() => {
+                    if (window.confirm("Transfer ownership?"))
+                      void run(async () => {
+                        await confirmOwnership();
+                        await api.transferWorkspace(selected, transferTo);
+                        setVerified(false);
+                        const w = await api.workspace(selected);
+                        setWorkspaces((v) => v.map((x) => (x.id === w.id ? w : x)));
+                      }, "Ownership transferred.");
+                  }}
+                >
+                  Transfer ownership
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={
+                    busy || (!user.sign_in_methods.includes("password") && !verified)
+                  }
+                  onClick={() => {
+                    if (window.confirm(`Permanently delete ${active.name}?`))
+                      void run(async () => {
+                        await confirmOwnership();
+                        await api.deleteWorkspace(selected);
+                        setWorkspaces((v) => v.filter((w) => w.id !== selected));
+                        selectWorkspace("");
+                      }, "Workspace deleted.");
+                  }}
+                >
+                  Delete {active.name}
+                </Button>
+              </>
+            )}
+          </section>
           <section className="grid gap-3">
             <h2 className="text-xl font-semibold">Members of {active.name}</h2>
             {members.map((m) => (
@@ -164,6 +383,7 @@ export default function WorkspacesPage() {
                   <Button
                     variant="secondary"
                     disabled={busy}
+                    aria-label={`Make ${m.name} ${m.role === "admin" ? "member" : "admin"}`}
                     onClick={() =>
                       void run(async () => {
                         await api.changeRole(
@@ -188,6 +408,7 @@ export default function WorkspacesPage() {
                   <Button
                     variant="secondary"
                     disabled={busy}
+                    aria-label={`Remove ${m.name}`}
                     onClick={() =>
                       void run(async () => {
                         await api.removeMember(selected, m.user_id);
@@ -249,6 +470,7 @@ export default function WorkspacesPage() {
                 />
                 <label htmlFor="role">Invitation role</label>
                 <select
+                  className="rounded-md border bg-background p-2"
                   id="role"
                   value={role}
                   onChange={(e) => setRole(e.target.value as "admin" | "member")}
@@ -280,6 +502,7 @@ export default function WorkspacesPage() {
                     <Button
                       variant="secondary"
                       disabled={busy}
+                      aria-label={`Revoke invitation for ${i.email || i.id}`}
                       onClick={() =>
                         void run(async () => {
                           await api.revokeInvitation(selected, i.id);
@@ -312,7 +535,7 @@ export default function WorkspacesPage() {
               )}
             </section>
           )}
-        </>
+        </div>
       )}
     </div>
   );

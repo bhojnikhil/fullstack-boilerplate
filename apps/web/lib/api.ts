@@ -60,10 +60,11 @@ export function getActiveWorkspace(): string | null {
   const userId = identity?.split(":")[0];
   return userId ? (storage()?.getItem(`workspace:${userId}`) ?? null) : null;
 }
-export function setActiveWorkspace(id: string) {
+export function setActiveWorkspace(id: string | null) {
   const userId = identity?.split(":")[0];
   if (!userId) throw new Error("Sign in before selecting a workspace.");
-  storage()?.setItem(`workspace:${userId}`, id);
+  if (id) storage()?.setItem(`workspace:${userId}`, id);
+  else storage()?.removeItem(`workspace:${userId}`);
 }
 export class ApiError extends Error {
   constructor(
@@ -83,7 +84,6 @@ export class ApiClient {
     credentials: "include",
     platform: "web",
     getAccessToken: () => accessToken,
-    getWorkspaceId: () => getActiveWorkspace(),
     getSessionId: () => identity,
     refresh: async (expected) => !!(await this.refresh(expected)),
     onSessionChanged: changedSession,
@@ -173,9 +173,9 @@ export class ApiClient {
   updateProfile(name: string) {
     return this.client.PATCH("/v1/me", { body: { name } }).then(unwrap);
   }
-  reauthenticate(password: string) {
+  reauthenticate(credentials: { password: string } | { id_token: string }) {
     return this.client
-      .POST("/v1/auth/reauthenticate", { body: { password } })
+      .POST("/v1/auth/reauthenticate", { body: credentials })
       .then(unwrap);
   }
   changePassword(current_password: string, new_password: string) {
@@ -222,9 +222,42 @@ export class ApiClient {
       .GET("/v1/workspaces", { params: { query: { cursor } } })
       .then(unwrap);
   }
-  createWorkspace(name: string) {
+  createWorkspace(name: string, currency: string, timezone: string) {
     return this.client
-      .POST("/v1/workspaces", { body: { name, currency: "USD", timezone: "UTC" } })
+      .POST("/v1/workspaces", { body: { name, currency, timezone } })
+      .then(unwrap);
+  }
+  workspace(workspace_id: string) {
+    return this.client
+      .GET("/v1/workspaces/{workspace_id}", { params: { path: { workspace_id } } })
+      .then(unwrap);
+  }
+  renameWorkspace(workspace_id: string, name: string) {
+    return this.client
+      .PATCH("/v1/workspaces/{workspace_id}", {
+        params: { path: { workspace_id } },
+        body: { name },
+      })
+      .then(unwrap);
+  }
+  leaveWorkspace(workspace_id: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/leave", {
+        params: { path: { workspace_id } },
+      })
+      .then(unwrap);
+  }
+  transferWorkspace(workspace_id: string, user_id: string) {
+    return this.client
+      .POST("/v1/workspaces/{workspace_id}/transfer-ownership", {
+        params: { path: { workspace_id } },
+        body: { user_id },
+      })
+      .then(unwrap);
+  }
+  deleteWorkspace(workspace_id: string) {
+    return this.client
+      .DELETE("/v1/workspaces/{workspace_id}", { params: { path: { workspace_id } } })
       .then(unwrap);
   }
   members(workspace_id: string, cursor?: string) {
@@ -277,32 +310,53 @@ export class ApiClient {
   getCurrentUser() {
     return this.client.GET("/v1/me").then(unwrap);
   }
-  async getItems(cursor?: string) {
+  async getItems(workspaceId: string, cursor?: string) {
     return {
       data: unwrap(
-        await this.client.GET("/v1/items", { params: { query: { cursor } } }),
+        await this.client.GET("/v1/items", {
+          headers: { "X-Workspace-Id": workspaceId },
+          params: { query: { cursor } },
+        }),
       ),
     };
   }
-  getItem(id: string) {
+  getItem(workspaceId: string, id: string) {
     return this.client
-      .GET("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .GET("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId },
+        params: { path: { item_id: id } },
+      })
       .then(unwrap);
   }
-  createItem(title: string, description: string) {
-    return this.client.POST("/v1/items", { body: { title, description } }).then(unwrap);
+  createItem(workspaceId: string, title: string, description: string, key: string) {
+    return this.client
+      .POST("/v1/items", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
+        body: { title, description },
+      })
+      .then(unwrap);
   }
-  updateItem(id: string, title: string, description: string) {
+  updateItem(
+    workspaceId: string,
+    id: string,
+    title: string,
+    description: string,
+    key: string,
+  ) {
     return this.client
       .PATCH("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
         params: { path: { item_id: id } },
         body: { title, description },
       })
       .then(unwrap);
   }
-  deleteItem(id: string) {
+  deleteItem(workspaceId: string, id: string, key: string) {
     return this.client
-      .DELETE("/v1/items/{item_id}", { params: { path: { item_id: id } } })
+      .DELETE("/v1/items/{item_id}", {
+        headers: { "X-Workspace-Id": workspaceId, "Idempotency-Key": key },
+        params: { path: { item_id: id } },
+      })
       .then(unwrap);
   }
   health() {

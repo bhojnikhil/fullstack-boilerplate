@@ -22,7 +22,10 @@ vi.mock("@/lib/api", () => ({
   setActiveWorkspace: mocks.setActiveWorkspace,
 }));
 vi.mock("@/lib/auth-store", () => {
-  const store = { user: { id: "user" }, restoreSession: vi.fn() };
+  const store = {
+    user: { id: "user", sign_in_methods: ["password"] },
+    restoreSession: vi.fn(),
+  };
   return { useAuthStore: () => store };
 });
 beforeEach(() => {
@@ -41,7 +44,7 @@ it("creates and selects a workspace before opening its members", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "Create workspace" }));
   await screen.findByText("Workspace created.");
-  expect(mocks.createWorkspace).toHaveBeenCalledWith("Team");
+  expect(mocks.createWorkspace).toHaveBeenCalledWith("Team", "USD", "UTC");
   expect(mocks.setActiveWorkspace).toHaveBeenCalledWith("w1");
   await waitFor(() => expect(mocks.members).toHaveBeenCalledWith("w1"));
 });

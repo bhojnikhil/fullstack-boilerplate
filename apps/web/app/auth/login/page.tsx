@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { pendingInvite } from "@/lib/pending-invite";
 import { GoogleSignIn } from "@/components/google-sign-in";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -22,7 +23,7 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      router.push("/items");
+      router.push(pendingInvite() ? "/invite" : "/items");
     } catch {
       setFormError("Login failed. Please try again.");
       setFailureCount((count) => count + 1);

@@ -54,7 +54,14 @@ export function createApiClient(options: ClientOptions) {
     const callerAuthorization = headers.has("Authorization");
     const accessToken = options.getAccessToken?.();
     set("Authorization", accessToken ? `Bearer ${accessToken}` : null);
-    const authPath = /(?:^|\/)v1\/auth(?:\/|$)/.test(new URL(request.url).pathname);
+    const path = new URL(request.url).pathname;
+    const authPath = /(?:^|\/)v1\/auth(?:\/|$)/.test(path);
+    // Credential endpoints either establish, rotate, or explicitly revoke a session.
+    // Authenticated session-management calls still need the normal refresh path.
+    const credentialPath =
+      /(?:^|\/)v1\/auth\/(?:login|register|refresh|google(?:\/link)?|verify-email(?:\/resend)?|password\/(?:forgot|reset)|email\/confirm|logout)\/?$/.test(
+        path,
+      );
     set("X-Workspace-Id", options.getWorkspaceId?.());
     set("X-App-Version", options.appVersion);
     set("X-Platform", options.platform);
@@ -72,7 +79,12 @@ export function createApiClient(options: ClientOptions) {
     });
     const send = options.fetch ?? globalThis.fetch;
     const response = await send(prepared.clone());
-    if (response.status !== 401 || !options.refresh || callerAuthorization || authPath)
+    if (
+      response.status !== 401 ||
+      !options.refresh ||
+      callerAuthorization ||
+      credentialPath
+    )
       return response;
     refreshing ??= options.refresh(originalSession).finally(() => {
       refreshing = null;

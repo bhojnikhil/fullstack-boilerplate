@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
-import { api, getActiveWorkspace, type Item } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  getActiveWorkspace,
+  setActiveWorkspace,
+  type Item,
+} from "@/lib/api";
 import { FormError, TextField } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,6 +17,11 @@ import { Label } from "@/components/ui/label";
 export default function ItemsPage() {
   const router = useRouter();
   const { user, restoreSession } = useAuthStore();
+  const [workspace, setWorkspace] = useState<{ id: string; name: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const intent = useRef<{ signature: string; key: string } | null>(null);
+  const workspaceRef = useRef<string | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -21,17 +32,22 @@ export default function ItemsPage() {
   const [error, setError] = useState("");
   const [failureCount, setFailureCount] = useState(0);
 
-  const loadItems = async (cursor?: string) => {
+  const loadItems = async (workspaceId: string, cursor?: string) => {
     const setLoading = cursor ? setIsLoadingMore : setIsLoading;
     try {
       setLoading(true);
-      const { data } = await api.getItems(cursor);
+      const { data } = await api.getItems(workspaceId, cursor);
+      if (workspaceRef.current !== workspaceId) return;
       setItems((previous) => (cursor ? [...previous, ...data.items] : data.items));
       setNextCursor(data.next_cursor);
       setError("");
     } catch (err) {
-      setError("Failed to load items");
-      console.error(err);
+      if (workspaceRef.current !== workspaceId) return;
+      if (err instanceof ApiError && err.status === 404) {
+        setActiveWorkspace(null);
+        setWorkspace(null);
+        router.replace("/workspaces");
+      } else setError("Failed to load items");
     } finally {
       setLoading(false);
     }
@@ -50,13 +66,48 @@ export default function ItemsPage() {
       return;
     }
 
-    if (!getActiveWorkspace()) {
-      router.push("/workspaces");
+    const workspaceId = getActiveWorkspace();
+    if (!workspaceId) {
+      router.replace("/workspaces");
       return;
     }
-    // The existing loader sets its loading state before each request.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadItems();
+    let active = true;
+    workspaceRef.current = workspaceId;
+    void api
+      .workspace(workspaceId)
+      .then((w) => {
+        if (!active) return;
+        setWorkspace({ id: w.id, name: w.name });
+        void loadItems(workspaceId);
+      })
+      .catch((err) => {
+        if (!active) return;
+        if (err instanceof ApiError && err.status === 404) {
+          setActiveWorkspace(null);
+          router.replace("/workspaces");
+        } else setError("Could not load the active workspace.");
+      });
+    const onStorage = (event: StorageEvent) => {
+      if (event.key?.startsWith("workspace:") && getActiveWorkspace() !== workspaceId) {
+        active = false;
+        workspaceRef.current = null;
+        setWorkspace(null);
+        setItems([]);
+        setTitle("");
+        setDescription("");
+        setEditingId(null);
+        intent.current = null;
+        router.replace("/workspaces");
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      active = false;
+      workspaceRef.current = null;
+      window.removeEventListener("storage", onStorage);
+    };
+    // loadItems uses the workspace id captured by this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, router, restoreSession]);
 
   const handleCreateItem = async (e: React.FormEvent) => {
@@ -67,28 +118,47 @@ export default function ItemsPage() {
       return;
     }
 
+    if (!workspace || savingRef.current) return;
+    const signature = JSON.stringify([workspace.id, editingId, title, description]);
+    if (intent.current?.signature !== signature)
+      intent.current = { signature, key: crypto.randomUUID() };
+    const key = intent.current.key;
+    savingRef.current = true;
+    setSaving(true);
     try {
-      if (editingId) await api.updateItem(editingId, title, description);
-      else await api.createItem(title, description);
+      if (editingId)
+        await api.updateItem(workspace.id, editingId, title, description, key);
+      else await api.createItem(workspace.id, title, description, key);
+      if (workspaceRef.current !== workspace.id) return;
+      intent.current = null;
       setEditingId(null);
       setTitle("");
       setDescription("");
       setError("");
-      await loadItems();
+      await loadItems(workspace.id);
     } catch (err) {
       setError("Failed to save item");
       setFailureCount((count) => count + 1);
       console.error(err);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
   const handleDeleteItem = async (id: string) => {
     try {
-      await api.deleteItem(id);
-      await loadItems();
+      if (!workspace || savingRef.current) return;
+      savingRef.current = true;
+      setSaving(true);
+      await api.deleteItem(workspace.id, id, crypto.randomUUID());
+      await loadItems(workspace.id);
     } catch (err) {
       setError("Failed to delete item");
       console.error(err);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
@@ -98,6 +168,7 @@ export default function ItemsPage() {
 
   return (
     <>
+      <p className="mb-4">Workspace: {workspace?.name}</p>
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-3xl font-semibold tracking-tight">Items</h1>
         <div className="flex flex-wrap items-center gap-4">
@@ -141,7 +212,7 @@ export default function ItemsPage() {
                 className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring md:text-sm dark:bg-input/30"
               />
             </div>
-            <Button type="submit" disabled={isLoadingMore}>
+            <Button type="submit" disabled={isLoadingMore || saving || !workspace}>
               {editingId ? "Save changes" : "Create"}
             </Button>
             {editingId && (
@@ -193,9 +264,9 @@ export default function ItemsPage() {
                     <Button
                       variant="secondary"
                       onClick={() => handleDeleteItem(item.id)}
-                      disabled={isLoadingMore}
+                      disabled={isLoadingMore || saving || !workspace}
                     >
-                      Delete
+                      Delete {item.title}
                     </Button>
                   </div>
                 </div>
@@ -204,8 +275,8 @@ export default function ItemsPage() {
                 <Button
                   type="button"
                   variant="secondary"
-                  disabled={isLoadingMore}
-                  onClick={() => loadItems(nextCursor)}
+                  disabled={isLoadingMore || saving || !workspace}
+                  onClick={() => workspace && loadItems(workspace.id, nextCursor)}
                 >
                   {isLoadingMore ? "Loading…" : "Load more"}
                 </Button>

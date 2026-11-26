@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { pendingInvite } from "@/lib/pending-invite";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
@@ -46,7 +47,7 @@ export function GoogleSignIn() {
             .then(({ user }) => {
               if (active) {
                 useAuthStore.setState({ user });
-                router.push("/items");
+                router.push(pendingInvite() ? "/invite" : "/items");
               }
             })
             .catch(() => {

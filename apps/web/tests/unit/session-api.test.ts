@@ -34,7 +34,7 @@ it("does not retry a write when a different tab replaced the session", async () 
   );
   const api = new ApiClient();
   await api.login("a@example.com", "password");
-  await expect(api.createItem("write", "")).rejects.toThrow("different session");
+  await expect(api.createItem("workspace-a", "write", "", "intent")).rejects.toThrow("different session");
   expect(writes).toBe(1);
 });
 it("refreshes an expired access token before revoking the same session", async () => {
@@ -227,9 +227,10 @@ it("keeps workspace selection scoped to the signed-in account", async () => {
   const client = new ApiClient();
   await client.login("a@example.com", "password");
   setActiveWorkspace("workspace-a");
-  await client.getItems();
+  await client.getItems("workspace-a");
   account = "b";
   await client.login("b@example.com", "password");
-  await client.getItems();
-  expect(workspaceHeaders).toEqual(["workspace-a", null]);
+  expect((await import("@/lib/api")).getActiveWorkspace()).toBeNull();
+  await client.getItems("workspace-b");
+  expect(workspaceHeaders).toEqual(["workspace-a", "workspace-b"]);
 });

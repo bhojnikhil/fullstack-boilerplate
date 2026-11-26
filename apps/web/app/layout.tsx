@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { appName } from "@/lib/public-settings";
+import { AccountNavigation } from "@/components/account-navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -44,9 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     <Link href="/items" className="hover:underline">
                       Items
                     </Link>
-                    <Link href="/auth/login" className="hover:underline">
-                      Sign in
-                    </Link>
+                    <AccountNavigation />
                   </nav>
                   <ThemeToggle />
                 </div>

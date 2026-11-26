@@ -54,4 +54,6 @@ test("registers, verifies, creates a workspace and item, and signs out", async (
   await expect(page.getByRole("heading", { name: "Test item" })).toBeVisible();
   await page.getByRole("button", { name: "Logout" }).click();
   await expect(page).toHaveURL(/\/(?:auth\/login)?$/);
+  await page.goto("/items");
+  await expect(page).toHaveURL(/\/auth\/login/);
 });

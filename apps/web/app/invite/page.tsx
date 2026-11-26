@@ -1,16 +1,27 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, setActiveWorkspace } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { FormError } from "@/components/form";
+import {
+  clearPendingInvite,
+  pendingInvite,
+  savePendingInvite,
+} from "@/lib/pending-invite";
 import { Button } from "@/components/ui/button";
 export default function InvitePage() {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
-  async function accept() {
+  useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
+    if (token) savePendingInvite(token);
+  }, []);
+  async function accept() {
+    const token =
+      new URLSearchParams(window.location.hash.slice(1)).get("token") ||
+      pendingInvite();
     if (!token) {
       setError("This invitation link is missing its token.");
       return;
@@ -21,11 +32,12 @@ export default function InvitePage() {
         useAuthStore.getState().user ||
         (await useAuthStore.getState().restoreSession());
       if (!session) {
-        setError("Sign in first, then reopen this invitation link.");
+        setError("Sign in first, then return to this invitation.");
         return;
       }
       const workspace = await api.acceptInvitation(token);
       setActiveWorkspace(workspace.id);
+      clearPendingInvite();
       window.history.replaceState(null, "", window.location.pathname);
       setDone(true);
     } catch {
