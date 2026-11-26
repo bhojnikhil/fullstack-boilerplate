@@ -25,7 +25,8 @@ class ItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    created_by_id: uuid.UUID | None
     title: str
     description: str | None
     is_active: bool

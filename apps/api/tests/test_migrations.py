@@ -248,3 +248,76 @@ async def test_0003_downgrade_does_not_restore_neutralized_links(empty_db_engine
             .all()
         )
     assert subjects == ["linked"]
+
+
+async def test_0005_moves_items_into_personal_workspaces_and_back(empty_db_engine):
+    await migrate(empty_db_engine, command.upgrade, "0004")
+    first, second, lonely = uuid4(), uuid4(), uuid4()
+    async with empty_db_engine.begin() as connection:
+        for user, email in ((first, "a@x.com"), (second, "b@x.com"), (lonely, "c@x.com")):
+            await connection.execute(
+                text("INSERT INTO users (id, email, name, is_active) VALUES (:id, :e, 'U', true)"),
+                {"id": user, "e": email},
+            )
+        for user, title in ((first, "one"), (first, "two"), (second, "three")):
+            await connection.execute(
+                text(
+                    "INSERT INTO items (id, user_id, title, is_active) VALUES (:id, :u, :t, true)"
+                ),
+                {"id": uuid4(), "u": user, "t": title},
+            )
+
+    await migrate(empty_db_engine, command.upgrade, "head")
+    async with empty_db_engine.connect() as connection:
+        await connection.run_sync(lambda conn: command.check(migration_config(conn)))
+        workspaces = (
+            await connection.execute(
+                text("SELECT owner_id, name, currency, timezone, slug FROM workspaces")
+            )
+        ).all()
+        memberships = (
+            await connection.execute(text("SELECT user_id, role FROM memberships"))
+        ).all()
+        items = (
+            await connection.execute(
+                text(
+                    "SELECT i.title, i.created_by_id, w.owner_id FROM items i JOIN workspaces w ON w.id = i.workspace_id"
+                )
+            )
+        ).all()
+    # One personal workspace per user who had items; a user without items gets none.
+    assert {row[0] for row in workspaces} == {first, second}
+    assert {(row[1], row[2], row[3]) for row in workspaces} == {("Personal", "USD", "UTC")}
+    assert all(row[4].startswith("personal-") for row in workspaces)
+    assert {(user, role) for user, role in memberships} == {(first, "owner"), (second, "owner")}
+    assert sorted((title, author == owner) for title, author, owner in items) == [
+        ("one", True),
+        ("three", True),
+        ("two", True),
+    ]
+
+    await migrate(empty_db_engine, command.downgrade, "0004")
+    async with empty_db_engine.connect() as connection:
+        restored = (
+            await connection.execute(text("SELECT title, user_id FROM items ORDER BY title"))
+        ).all()
+    assert restored == [("one", first), ("three", second), ("two", first)]
+    await migrate(empty_db_engine, command.upgrade, "head")
+
+
+async def test_0005_refuses_an_application_role_that_bypasses_row_level_security(
+    empty_db_engine, monkeypatch
+):
+    import sqlalchemy.exc
+
+    monkeypatch.setenv("APP_DB_ROLE", "postgres")  # A superuser in the test database.
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="BYPASSRLS"):
+        await migrate(empty_db_engine, command.upgrade, "head")
+
+
+def test_app_db_role_must_be_a_plain_role_name():
+    from app.core.config import DatabaseSettings
+
+    assert DatabaseSettings(_env_file=None).app_db_role == "app_user"
+    with pytest.raises(ValueError, match="APP_DB_ROLE"):
+        DatabaseSettings(app_db_role="Robert'; DROP TABLE users;--", _env_file=None)

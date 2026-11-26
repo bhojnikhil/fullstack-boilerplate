@@ -31,6 +31,7 @@ from app.jobs.handlers import JobContext
 from app.jobs.worker import drain
 from app.modules.auth.models import SignInMethod, User
 from app.modules.auth.sessions import IssuedTokens, SessionService
+from app.modules.workspaces.models import Membership, Workspace, WorkspaceRole
 
 TEST_PASSWORD = "testpassword123"
 WEB_ORIGIN = "http://localhost:3000"
@@ -40,10 +41,26 @@ GOOGLE_ANDROID_CLIENT_ID = "android-client.apps.googleusercontent.com"
 
 @pytest.fixture(scope="session")
 def database_url() -> URL:
+    """The application's URL: a non-owner role that row-level security applies to."""
     raw = os.getenv("DATABASE_URL")
     if not raw:
         pytest.fail("Set DATABASE_URL to a dedicated Postgres test database or run make test.")
     return postgres_url(raw)
+
+
+@pytest.fixture(scope="session")
+def owner_url(database_url: URL) -> URL:
+    """The migration owner's URL. Tests migrate and seed as the owner; requests never do."""
+    raw = os.getenv("MIGRATION_DATABASE_URL")
+    if not raw:
+        pytest.fail(
+            "Set MIGRATION_DATABASE_URL to the owner role of the test database "
+            "(DATABASE_URL is the app role) or run make test."
+        )
+    url = postgres_url(raw)
+    if url.username == database_url.username:
+        pytest.fail("MIGRATION_DATABASE_URL and DATABASE_URL must use different roles.")
+    return url
 
 
 @pytest.fixture(scope="session")
@@ -61,23 +78,24 @@ def migration_config(connection: Connection) -> Config:
 
 
 @pytest.fixture
-async def empty_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
-    admin = create_async_engine(
-        database_url, poolclass=NullPool, connect_args={"connect_timeout": 3}
-    )
+async def schema_engines(
+    database_url: URL, owner_url: URL
+) -> AsyncIterator[tuple[AsyncEngine, AsyncEngine]]:
+    """An empty schema, as (owner engine, app-role engine). The app role gets its table
+    privileges from the migrations, as in a real deployment."""
+    admin = create_async_engine(owner_url, poolclass=NullPool, connect_args={"connect_timeout": 3})
     schema = f"test_{uuid4().hex}"
     try:
         async with admin.begin() as connection:
             await connection.execute(CreateSchema(schema))
-        engine = create_async_engine(
-            database_url,
-            poolclass=NullPool,
-            connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 3},
-        )
+        options = {"options": f"-csearch_path={schema}", "connect_timeout": 3}
+        owner = create_async_engine(owner_url, poolclass=NullPool, connect_args=options)
+        app_role = create_async_engine(database_url, poolclass=NullPool, connect_args=options)
         try:
-            yield engine
+            yield owner, app_role
         finally:
-            await engine.dispose()
+            await app_role.dispose()
+            await owner.dispose()
             async with admin.begin() as connection:
                 await connection.execute(DropSchema(schema, cascade=True))
     finally:
@@ -85,11 +103,33 @@ async def empty_db_engine(database_url: URL) -> AsyncIterator[AsyncEngine]:
 
 
 @pytest.fixture
-async def test_db_engine(empty_db_engine: AsyncEngine) -> AsyncEngine:
+def empty_db_engine(schema_engines: tuple[AsyncEngine, AsyncEngine]) -> AsyncEngine:
+    """The owner's engine on an empty schema (for migration tests)."""
+    return schema_engines[0]
+
+
+@pytest.fixture
+async def owner_engine(
+    schema_engines: tuple[AsyncEngine, AsyncEngine],
+) -> AsyncEngine:
+    """The owner's engine on a migrated schema. Superusers bypass row-level security,
+    so use it to seed and inspect, never to exercise the API."""
+    owner, _ = schema_engines
     # Concurrent index operations require Alembic to manage its own transactions.
-    async with empty_db_engine.connect() as connection:
+    async with owner.connect() as connection:
         await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
-    return empty_db_engine
+    return owner
+
+
+@pytest.fixture
+def test_db_engine(owner_engine: AsyncEngine, schema_engines) -> AsyncEngine:
+    """The application's engine (non-owner role) on the migrated schema."""
+    return schema_engines[1]
+
+
+@pytest.fixture
+def owner_sessions(owner_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(owner_engine, expire_on_commit=False)
 
 
 @pytest.fixture
@@ -104,10 +144,11 @@ async def test_db(session_factory) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-def config(database_url: URL, secret_key: str) -> Settings:
+def config(database_url: URL, owner_url: URL, secret_key: str) -> Settings:
     return Settings(
         env="test",
         database_url=database_url.render_as_string(hide_password=False),
+        migration_database_url=owner_url.render_as_string(hide_password=False),
         secret_key=secret_key,
         # Per-test, in-process backends. The Postgres limiter has its own tests.
         email_backend="memory",
@@ -278,3 +319,64 @@ async def test_session(session_factory, config: Settings, test_user: User) -> Is
 @pytest.fixture
 def auth_headers(test_session: IssuedTokens) -> dict[str, str]:
     return bearer(test_session)
+
+
+async def create_workspace(
+    sessions,
+    owner: User,
+    *,
+    name: str = "Test Workspace",
+    slug: str | None = None,
+    members: tuple[tuple[User, WorkspaceRole], ...] = (),
+) -> Workspace:
+    """Insert a workspace as the table owner (which bypasses row-level security)."""
+    workspace_id = uuid4()
+    async with sessions.begin() as db:
+        workspace = Workspace(
+            id=workspace_id,
+            name=name,
+            slug=slug or f"ws-{workspace_id.hex[:16]}",
+            currency="USD",
+            timezone="UTC",
+            owner_id=owner.id,
+        )
+        db.add(workspace)
+        await db.flush()
+        db.add(Membership(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.OWNER))
+        for member, role in members:
+            db.add(Membership(workspace_id=workspace_id, user_id=member.id, role=role))
+    return workspace
+
+
+def in_workspace(headers: dict[str, str], workspace: Workspace) -> dict[str, str]:
+    return {**headers, "X-Workspace-Id": str(workspace.id)}
+
+
+@pytest.fixture
+async def workspace(owner_sessions, test_user: User) -> Workspace:
+    """A workspace owned by ``test_user``."""
+    return await create_workspace(owner_sessions, test_user)
+
+
+@pytest.fixture
+def ws_headers(auth_headers: dict[str, str], workspace: Workspace) -> dict[str, str]:
+    """``test_user``'s credentials with their workspace active."""
+    return in_workspace(auth_headers, workspace)
+
+
+async def person(
+    session_factory, config: Settings, email: str, *, verified: bool = True
+) -> tuple[User, dict[str, str]]:
+    """A user with a live session: (user, bearer headers)."""
+    user = await create_user(
+        session_factory, email=email, name=email.split("@")[0], verified=verified
+    )
+    return user, bearer(await sign_in(session_factory, config, user))
+
+
+async def owner_query(owner_engine, sql: str, **params):
+    """Rows from a read-only statement run as the owner (bypasses row-level security)."""
+    from sqlalchemy import text
+
+    async with owner_engine.connect() as connection:
+        return (await connection.execute(text(sql), params)).all()

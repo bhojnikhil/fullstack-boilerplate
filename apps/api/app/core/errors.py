@@ -36,9 +36,21 @@ class ErrorCode(StrEnum):
     GOOGLE_ALREADY_LINKED = "google_already_linked"
     GOOGLE_NOT_LINKED = "google_not_linked"
     LAST_SIGN_IN_METHOD = "last_sign_in_method"
+    # Workspaces. Anything the caller cannot see is reported as not found, never forbidden.
+    WORKSPACE_REQUIRED = "workspace_required"
+    WORKSPACE_NOT_FOUND = "workspace_not_found"
+    MEMBER_NOT_FOUND = "member_not_found"
+    INVITATION_NOT_FOUND = "invitation_not_found"
+    INVALID_INVITATION = "invalid_invitation"
+    INSUFFICIENT_ROLE = "insufficient_role"
+    WORKSPACE_SLUG_TAKEN = "workspace_slug_taken"
+    OWNER_CANNOT_LEAVE = "owner_cannot_leave"
+    OWNER_PROTECTED = "owner_protected"
+    INVITATION_NOT_PENDING = "invitation_not_pending"
+    ALREADY_MEMBER = "already_member"
+    WORKSPACE_LIMIT_REACHED = "workspace_limit_reached"
     # Items and platform.
     ITEM_NOT_FOUND = "item_not_found"
-    ITEM_FORBIDDEN = "item_forbidden"
     INVALID_CURSOR = "invalid_cursor"
     NOT_READY = "not_ready"
     INVALID_IDEMPOTENCY_KEY = "invalid_idempotency_key"
@@ -121,8 +133,25 @@ DOMAIN_ERRORS = {
     ErrorCode.GOOGLE_ALREADY_LINKED: (409, "A different Google account is already linked"),
     ErrorCode.GOOGLE_NOT_LINKED: (404, "No Google account is linked"),
     ErrorCode.LAST_SIGN_IN_METHOD: (409, "Add another sign-in method before removing this one"),
+    ErrorCode.WORKSPACE_REQUIRED: (400, "Send the workspace in the X-Workspace-Id header"),
+    ErrorCode.WORKSPACE_NOT_FOUND: (404, "Workspace not found"),
+    ErrorCode.MEMBER_NOT_FOUND: (404, "Member not found"),
+    ErrorCode.INVITATION_NOT_FOUND: (404, "Invitation not found"),
+    ErrorCode.INVALID_INVITATION: (404, "This invitation is invalid or has expired"),
+    ErrorCode.INSUFFICIENT_ROLE: (403, "Your role in this workspace does not allow this"),
+    ErrorCode.WORKSPACE_SLUG_TAKEN: (409, "This workspace address is already taken"),
+    ErrorCode.OWNER_CANNOT_LEAVE: (
+        409,
+        "The owner cannot leave. Transfer ownership or delete the workspace first.",
+    ),
+    ErrorCode.OWNER_PROTECTED: (
+        409,
+        "The owner cannot be changed or removed. Transfer ownership first.",
+    ),
+    ErrorCode.INVITATION_NOT_PENDING: (409, "This invitation was already accepted"),
+    ErrorCode.ALREADY_MEMBER: (409, "This person is already a member of the workspace"),
+    ErrorCode.WORKSPACE_LIMIT_REACHED: (409, "You own the maximum number of workspaces"),
     ErrorCode.ITEM_NOT_FOUND: (404, "Item not found"),
-    ErrorCode.ITEM_FORBIDDEN: (403, "Not authorized to access this item"),
     ErrorCode.INVALID_CURSOR: (422, "Invalid pagination cursor"),
     ErrorCode.NOT_READY: (503, "Service is not ready"),
     ErrorCode.INVALID_IDEMPOTENCY_KEY: (422, "Invalid idempotency key"),

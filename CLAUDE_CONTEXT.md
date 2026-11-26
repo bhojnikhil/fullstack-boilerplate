@@ -88,10 +88,20 @@ Conventions added with the auth redesign:
   plus `X-CSRF-Token`); other clients get it in the body. See ADRs 0008 to 0010.
 - The web pages are at `/auth/login` and `/auth/register`. The web keeps the access token in
   memory and refreshes it with the cookie.
-- `/v1/items` uses the signed-in user's ID and sorts by creation time and UUID. The list response
-  includes `items` and `next_cursor`.
-- Signed-in item mutations and profile updates can take an `Idempotency-Key`. The key
-  is scoped to the user, with a 24-hour replay window. The response record is written in
+- `/v1/items` is workspace-scoped: it needs `X-Workspace-Id`, sorts by creation time and UUID,
+  and its list response includes `items` and `next_cursor`.
+- Tenancy ([ADR 0016](docs/adr/0016-workspaces-and-rls.md)): workspace-scoped routes depend
+  on `ActiveWorkspace` (header) or `PathWorkspace` / `require_role("admin", path=True)`
+  (`app.modules.workspaces.dependencies`), which answer 404 for non-members. Tenant
+  repositories extend `app.core.tenancy.TenantRepository` and take the workspace id; never
+  add an unscoped query for tenant data. Tenant tables need `ENABLE` and `FORCE ROW LEVEL
+SECURITY` plus policies in their migration (a test fails otherwise). The API connects as the
+  non-owner role in `DATABASE_URL`; Alembic and test seeding use `MIGRATION_DATABASE_URL`
+  (the owner). Lock order in membership code: user, workspace, then membership/invitation
+  rows. Add every new workspace-scoped route to `CASES` in `tests/test_tenant_isolation.py`.
+  Signup does not create a workspace.
+- Signed-in item and workspace mutations and profile updates can take an `Idempotency-Key`. The key
+  is scoped to the user and the active workspace, with a 24-hour replay window. The response record is written in
   the same Postgres transaction as the mutation. See [ADR 0004](docs/adr/0004-async-postgres.md).
 - Request logs contain the request ID, route template, method, status, duration and
   user ID when available. Exceptions include stack frames and types. Keep messages,
@@ -149,7 +159,7 @@ make test-mobile doctor-mobile    # mobile Jest tests, expo-doctor
 ```
 
 For targeted API tests, run from `apps/api` with `ENV=test` and a dedicated Postgres
-`DATABASE_URL` and a throwaway `SECRET_KEY` (`export SECRET_KEY="$(openssl rand -hex 32)"`).
+`DATABASE_URL` (the non-owner `app_user` role), `MIGRATION_DATABASE_URL` (the owner; create the role with `make db-bootstrap`) and a throwaway `SECRET_KEY` (`export SECRET_KEY="$(openssl rand -hex 32)"`).
 Use `uv run --locked pytest --no-cov tests/test_settings.py` to skip the suite-wide
 coverage gate for a targeted run. The fixtures apply Alembic in a fresh schema for each database test,
 including tests with concurrent requests. CI upgrades its Postgres service and runs

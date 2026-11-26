@@ -26,6 +26,7 @@ LINKED = {
     Template.RESET_PASSWORD,
     Template.EMAIL_CHANGE,
     Template.PASSWORD_CHANGED,
+    Template.WORKSPACE_INVITATION,
 }
 CONTEXT = {
     "name": "<b>Ann</b> & co",
@@ -33,6 +34,9 @@ CONTEXT = {
     "expires": "24 hours",
     "sign_in_link": "https://web.example/auth/login",
     "reset_link": "https://web.example/auth/forgot-password",
+    "inviter": "<b>Ann</b> & co",
+    "workspace": "Home & <b>Garden</b>",
+    "role": "member",
 }
 
 
@@ -145,7 +149,7 @@ def mail_routes(app):
         if outcome == "domain-error":
             raise DomainError(ErrorCode.SESSION_NOT_FOUND)
         if outcome == "commit-error":
-            db.add(Item(user_id=uuid4(), title="violates the foreign key at commit"))
+            db.add(Item(workspace_id=uuid4(), title="violates the foreign key at commit"))
         return {"status": "ok"}
 
 

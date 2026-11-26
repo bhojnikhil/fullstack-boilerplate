@@ -65,6 +65,7 @@ dependencies = [
     { name = "sentry-sdk" },
     { name = "sqlalchemy" },
     { name = "structlog" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -92,6 +93,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==3.0.1" },
     { name = "sqlalchemy", specifier = "==2.1.9" },
     { name = "structlog", specifier = "==26.1.0" },
+    { name = "tzdata", specifier = "==2026.6" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.54.0" },
 ]
 

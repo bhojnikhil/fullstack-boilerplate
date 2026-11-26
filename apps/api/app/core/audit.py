@@ -43,6 +43,15 @@ class AuditEventType(StrEnum):
     ACCOUNT_DELETED = "account_deleted"
     # The inbox owner proved control of an unverified account; unproven credentials removed.
     ACCOUNT_CLAIMED = "account_claimed"
+    WORKSPACE_CREATED = "workspace_created"
+    WORKSPACE_DELETED = "workspace_deleted"
+    MEMBER_ROLE_CHANGED = "member_role_changed"
+    MEMBER_REMOVED = "member_removed"
+    MEMBER_LEFT = "member_left"
+    OWNERSHIP_TRANSFERRED = "ownership_transferred"
+    INVITATION_CREATED = "invitation_created"
+    INVITATION_ACCEPTED = "invitation_accepted"
+    INVITATION_REVOKED = "invitation_revoked"
     # A push token registered by another user moved to the caller (details: previous owner).
     DEVICE_TOKEN_REASSIGNED = "device_token_reassigned"
 

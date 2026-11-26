@@ -58,7 +58,7 @@ export default function Members() {
               {item.user_id === accountId ? " (you)" : ""}
             </Body>
             <Muted>
-              {item.email} · {item.role}
+              {item.email ?? item.name} · {item.role}
             </Muted>
             {canManage && item.role !== "owner" && item.user_id !== accountId ? (
               <Button

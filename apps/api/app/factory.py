@@ -41,6 +41,9 @@ from app.modules.auth.cookies import CSRF_HEADER
 from app.modules.auth.deletion import AccountDeletionHook
 from app.modules.devices import router as devices
 from app.modules.items import router as items
+from app.modules.workspaces import router as workspaces
+from app.modules.workspaces.deletion import WorkspaceDeletionHook
+from app.modules.workspaces.dependencies import WORKSPACE_HEADER
 
 
 def operation_id(route: APIRoute) -> str:
@@ -109,7 +112,7 @@ def create_app(
     )
     app.state.breach_checker = BreachedPasswordChecker() if config.password_breach_check else None
     # Modules that own user data register deletion hooks here (see auth/deletion.py).
-    deletion_hooks: list[AccountDeletionHook] = []
+    deletion_hooks: list[AccountDeletionHook] = [WorkspaceDeletionHook()]
     app.state.account_deletion_hooks = deletion_hooks
 
     configure_logging(config.env)
@@ -126,7 +129,7 @@ def create_app(
             "Authorization",
             "Content-Type",
             "Idempotency-Key",
-            "X-Workspace-Id",
+            WORKSPACE_HEADER,
             "X-App-Version",
             REQUEST_ID,
             PLATFORM_HEADER,
@@ -143,6 +146,8 @@ def create_app(
     )
     api.include_router(auth.router)
     api.include_router(auth.me_router)
+    api.include_router(workspaces.router)
+    api.include_router(workspaces.invitations_router)
     api.include_router(items.router)
     api.include_router(devices.router)
     api.include_router(appversion.router)

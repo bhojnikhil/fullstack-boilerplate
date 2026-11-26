@@ -25,6 +25,7 @@ from app.factory import create_app
 from app.modules.auth.models import User
 from app.modules.items.models import Item
 from app.modules.items.repository import ItemRepository
+from app.modules.workspaces.dependencies import ActiveWorkspace
 from tests.conftest import bearer, migration_config, sign_in
 
 
@@ -82,9 +83,9 @@ async def test_framework_and_domain_envelopes(client, method, url, body, status,
         ("PATCH", f"/v1/items/{uuid4()}", {"title": "Title"}),
     ],
 )
-async def test_unknown_input_fields(client, auth_headers, method, path, payload):
+async def test_unknown_input_fields(client, ws_headers, method, path, payload):
     response = await client.request(
-        method, path, json={**payload, "extra": "private-value"}, headers=auth_headers
+        method, path, json={**payload, "extra": "private-value"}, headers=ws_headers
     )
     error = assert_error(response, 422, "validation_error")
     assert {"location": ["body", "extra"], "type": "extra_forbidden"} in error["details"]["fields"]
@@ -110,12 +111,12 @@ async def test_bad_jwt_and_inactive_user(
 
 
 async def test_middleware_logs_template_and_user_without_request_data(
-    client, capsys, test_user, auth_headers
+    client, capsys, test_user, auth_headers, ws_headers, workspace
 ):
     configure_logging("test")
     response = await client.get(
         f"/v1/items/{uuid4()}?private_query=private-value",
-        headers={**auth_headers, "X-Request-Id": "from-client-42"},
+        headers={**ws_headers, "X-Request-Id": "from-client-42"},
     )
     assert_error(response, 404, "item_not_found")
     assert response.headers["x-request-id"] == "from-client-42"
@@ -128,6 +129,7 @@ async def test_middleware_logs_template_and_user_without_request_data(
     assert log["status"] == 404
     assert log["duration_ms"] >= 0
     assert log["user_id"] == str(test_user.id)
+    assert log["workspace_id"] == str(workspace.id)
     assert "private-value" not in output
     assert test_user.email not in output
     assert auth_headers["Authorization"] not in output
@@ -215,13 +217,13 @@ async def test_body_limit_with_and_without_content_length(config, session_factor
 
 @pytest.mark.parametrize("log_env", ["test", "development"])
 async def test_rollback_after_flushed_write(
-    app, client, session_factory, test_user, capsys, log_env
+    app, client, owner_sessions, ws_headers, test_user, capsys, log_env
 ):
     configure_logging(log_env)
 
     @app.post("/test-write")
-    async def write(db: RequestSession, error: str) -> dict[str, str]:
-        await ItemRepository(db).create(test_user.id, "will be rolled back")
+    async def write(db: RequestSession, workspace: ActiveWorkspace, error: str) -> dict[str, str]:
+        await ItemRepository(db, workspace.workspace.id).create(test_user.id, "will be rolled back")
         if error == "expected":
             raise HTTPException(400, "Test request error")
         private_local = "private-local"
@@ -235,13 +237,17 @@ async def test_rollback_after_flushed_write(
     ):
         response = await client.post(
             f"/test-write?error={kind}",
-            headers={"X-Request-Id": "rollback-42", "Origin": "http://localhost:3000"},
+            headers={
+                **ws_headers,
+                "X-Request-Id": "rollback-42",
+                "Origin": "http://localhost:3000",
+            },
         )
         assert_error(response, status, code)
         assert response.headers["x-request-id"] == "rollback-42"
         assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
         assert "private-value" not in response.text
-        async with session_factory() as session:
+        async with owner_sessions() as session:
             assert await session.scalar(select(Item)) is None
 
     output = capsys.readouterr().err
@@ -266,15 +272,17 @@ async def test_rollback_after_flushed_write(
     assert "private-local" not in output
 
 
-async def test_commit_failure_does_not_send_success(app, client, session_factory, test_user):
+async def test_commit_failure_does_not_send_success(
+    app, client, owner_sessions, ws_headers, test_user
+):
     @app.post("/test-commit")
-    async def write(db: RequestSession) -> dict[str, str]:
-        await ItemRepository(db).create(test_user.id, "also rolled back")
-        db.add(Item(user_id=uuid4(), title="invalid foreign key"))
+    async def write(db: RequestSession, workspace: ActiveWorkspace) -> dict[str, str]:
+        await ItemRepository(db, workspace.workspace.id).create(test_user.id, "also rolled back")
+        db.add(Item(workspace_id=uuid4(), title="invalid foreign key"))
         return {"status": "ok"}
 
-    assert_error(await client.post("/test-commit"), 500, "internal_error")
-    async with session_factory() as session:
+    assert_error(await client.post("/test-commit", headers=ws_headers), 500, "internal_error")
+    async with owner_sessions() as session:
         assert await session.scalar(select(Item)) is None
 
 
@@ -326,23 +334,23 @@ async def test_stream_failure_is_logged_once_without_leaking_the_exception(app, 
     assert "private stream failure" not in output
 
 
-async def test_ready_checks_revision(client, test_db_engine):
+async def test_ready_checks_revision(client, owner_engine):
     assert (await client.get("/ready")).json() == {"status": "ok"}
-    async with test_db_engine.connect() as connection:
+    async with owner_engine.connect() as connection:
         await connection.run_sync(lambda conn: command.downgrade(migration_config(conn), "0001"))
     assert_error(await client.get("/ready"), 503, "not_ready")
     assert (await client.get("/health")).status_code == 200
-    async with test_db_engine.connect() as connection:
+    async with owner_engine.connect() as connection:
         await connection.run_sync(lambda conn: command.downgrade(migration_config(conn), "base"))
     assert_error(await client.get("/ready"), 503, "not_ready")
 
 
 async def test_ready_when_database_has_newer_revision(
-    client, test_db_engine, config, session_factory, capsys, monkeypatch
+    client, owner_engine, config, session_factory, capsys, monkeypatch
 ):
     monkeypatch.setattr(health, "reported_unknown_sets", set())
     configure_logging("test")
-    async with test_db_engine.begin() as connection:
+    async with owner_engine.begin() as connection:
         await connection.execute(text("UPDATE alembic_version SET version_num = '0004_newer'"))
         await connection.execute(text("INSERT INTO alembic_version VALUES ('0003_newer')"))
     assert (await client.get("/ready")).json() == {"status": "ok"}
@@ -351,7 +359,7 @@ async def test_ready_when_database_has_newer_revision(
         transport=ASGITransport(app=other_app), base_url="http://localhost"
     ) as other:
         assert (await other.get("/ready")).json() == {"status": "ok"}
-    async with test_db_engine.begin() as connection:
+    async with owner_engine.begin() as connection:
         await connection.execute(
             text("DELETE FROM alembic_version WHERE version_num = '0003_newer'")
         )
@@ -380,15 +388,16 @@ async def test_ready_when_postgres_cannot_connect(config, database_url):
             assert (await client.get("/health")).status_code == 200
 
 
-async def test_migration_drift_is_detected(test_db_engine):
-    async with test_db_engine.begin() as connection:
+async def test_migration_drift_is_detected(owner_engine):
+    async with owner_engine.begin() as connection:
         await connection.run_sync(lambda conn: command.check(migration_config(conn)))
         await connection.execute(text("ALTER TABLE items ADD COLUMN drift text"))
         with pytest.raises(AutogenerateDiffsDetected, match="drift"):
             await connection.run_sync(lambda conn: command.check(migration_config(conn)))
 
 
-async def test_adopt_legacy_schema_without_losing_data(config, empty_db_engine):
+async def test_adopt_legacy_schema_without_losing_data(config, schema_engines):
+    empty_db_engine, app_engine = schema_engines
     user_id, item_id = uuid4(), uuid4()
     ddl = Path(__file__).with_name("fixtures").joinpath("pre_alembic_schema.sql").read_text()
     async with empty_db_engine.begin() as connection:
@@ -412,12 +421,19 @@ async def test_adopt_legacy_schema_without_losing_data(config, empty_db_engine):
         await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
         await connection.run_sync(lambda conn: command.check(migration_config(conn)))
 
-    sessions = async_sessionmaker(empty_db_engine, expire_on_commit=False)
+    sessions = async_sessionmaker(app_engine, expire_on_commit=False)
     app = create_app(config, sessions)
     headers = bearer(await sign_in(sessions, config, User(id=user_id)))
+    async with empty_db_engine.connect() as connection:
+        personal = await connection.scalar(
+            text("SELECT id FROM workspaces WHERE owner_id = :user"), {"user": user_id}
+        )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
         assert (await client.get("/ready")).status_code == 200
-        restored = await client.get(f"/v1/items/{item_id}", headers=headers)
+        # The item moved into the owner's new personal workspace.
+        restored = await client.get(
+            f"/v1/items/{item_id}", headers={**headers, "X-Workspace-Id": str(personal)}
+        )
     assert restored.status_code == 200
     assert restored.json()["id"] == str(item_id)
     assert restored.json()["title"] == "Pre-Alembic item"
@@ -451,8 +467,7 @@ async def test_concurrent_index_migration_can_retry_after_partial_upgrade(empty_
             text("CREATE INDEX ix_items_user_created_id ON items (user_id, created_at, id)")
         )
         await connection.commit()
-        await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
-        await connection.run_sync(lambda conn: command.check(migration_config(conn)))
+        await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "0003"))
         assert (
             await connection.scalar(
                 text(
@@ -461,11 +476,14 @@ async def test_concurrent_index_migration_can_retry_after_partial_upgrade(empty_
             )
             is True
         )
+        # Revision 0005 replaces this index with a workspace-scoped one.
+        await connection.run_sync(lambda conn: command.upgrade(migration_config(conn), "head"))
+        await connection.run_sync(lambda conn: command.check(migration_config(conn)))
 
 
-async def test_api_root_and_empty_page(client, auth_headers):
+async def test_api_root_and_empty_page(client, ws_headers):
     assert (await client.get("/v1")).json()["openapi"] == "/openapi.json"
-    assert (await client.get("/v1/items", headers=auth_headers)).json() == {
+    assert (await client.get("/v1/items", headers=ws_headers)).json() == {
         "items": [],
         "next_cursor": None,
     }

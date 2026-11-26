@@ -24,7 +24,8 @@ export interface Workspace {
 export interface Member {
   user_id: string;
   name: string;
-  email: string;
+  /** Only admins and the owner see other members' addresses; null otherwise. */
+  email: string | null;
   role: Role;
 }
 
